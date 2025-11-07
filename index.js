@@ -4,7 +4,7 @@ const { MongoClient } = require("mongodb");
 
 // Importar rutas
 const authRoutes = require("./endpoints/auth");
-const formRoutes = require("./endpoints/forms");
+const flujos = require("./endpoints/flujos");
 const answersRoutes = require("./endpoints/answers");
 const mailRoutes = require("./endpoints/mail");
 const gen = require("./endpoints/Generador");
@@ -47,7 +47,7 @@ app.use(async (req, res, next) => {
 
 // Rutas
 app.use("/api/auth", authRoutes);
-app.use("/api/forms", formRoutes);
+app.use("/api/workflows", flujos);
 app.use("/api/respuestas", answersRoutes);
 app.use("/api/mail", mailRoutes);
 app.use("/api/generador", gen);
