@@ -40,7 +40,8 @@ router.get("/:mail", async (req, res) => {
 
     if (!usr) return res.status(404).json({ error: "Usuario no encontrado" });
     
-    res.json({id: usr._id, empresa: usr.empresa, cargo: usr.cargo});
+    // ⚠️ CAMBIO: devolver 'departamento' en lugar de 'empresa'
+    res.json({id: usr._id, departamento: usr.departamento || usr.empresa, cargo: usr.cargo});
   } catch (err) {
     res.status(500).json({ error: "Error al obtener Usuario" });
   }
@@ -160,19 +161,22 @@ router.post("/logout", async (req, res) => {
 
 router.post("/register", async (req, res) => {
   try {
-    const { nombre, apellido, mail, empresa, cargo, rol, estado } = req.body;
-    if (!nombre || !apellido || !mail || !empresa || !cargo || !rol) {
+    const { nombre, apellido, mail, departamento, cargo, rol, estado } = req.body;
+    
+    if (!nombre || !apellido || !mail || !departamento || !cargo || !rol) {
       return res.status(400).json({ error: "Todos los campos son obligatorios" });
     }
+    
     const existingUser = await req.db.collection("usuarios").findOne({ mail });
     if (existingUser) {
       return res.status(400).json({ error: "El usuario ya existe" });
     }
+    
     const newUser = {
       nombre,
       apellido,
       mail,
-      empresa,
+      departamento, 
       cargo,
       rol,
       pass: "",
@@ -180,10 +184,12 @@ router.post("/register", async (req, res) => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
+    
     const result = await req.db.collection("usuarios").insertOne(newUser);
     const createdUser = await req.db.collection("usuarios").findOne({ 
       _id: result.insertedId 
     });
+    
     res.status(201).json({
       success: true,
       message: "Usuario registrado exitosamente",
@@ -195,6 +201,78 @@ router.post("/register", async (req, res) => {
   }
 });
 
+
+// PUT - Actualizar usuario
+router.put("/users/:id", async (req, res) => {
+  try {
+    const { nombre, apellido, mail, departamento, cargo, rol, estado } = req.body;
+    
+    if (!nombre || !apellido || !mail || !departamento || !cargo || !rol || !estado) {
+        return res.status(400).json({ error: "Todos los campos obligatorios son requeridos para la actualización" });
+    }
+    
+    const updateData = {
+      nombre,
+      apellido,
+      mail,
+      departamento,
+      cargo,
+      rol,
+      estado,
+      updatedAt: new Date().toISOString()
+    };
+    
+    const result = await req.db.collection("usuarios").updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+    
+    const updatedUser = await req.db.collection("usuarios").findOne({
+      _id: new ObjectId(req.params.id)
+    });
+
+    res.json({
+      success: true,
+      message: "Usuario actualizado exitosamente",
+      user: updatedUser
+    });
+  } catch (err) {
+    console.error("Error al actualizar usuario:", err);
+    if (err.message.includes("ObjectId")) {
+      return res.status(400).json({ error: "ID de usuario inválido" });
+    }
+    res.status(500).json({ error: "Error interno del servidor al actualizar" });
+  }
+});
+
+
+// DELETE - Eliminar usuario
+router.delete("/users/:id", async (req, res) => {
+  try {
+    const userId = req.params.id;
+    
+    const result = await req.db.collection("usuarios").deleteOne({
+      _id: new ObjectId(userId)
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    res.json({ success: true, message: "Usuario eliminado exitosamente" });
+
+  } catch (err) {
+    console.error("Error eliminando usuario:", err);
+    if (err.message.includes("ObjectId")) {
+      return res.status(400).json({ error: "ID de usuario inválido" });
+    }
+    res.status(500).json({ error: "Error al eliminar usuario" });
+  }
+});
 
 router.post("/set-password", async (req, res) => {
   try {
