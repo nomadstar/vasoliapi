@@ -1,25 +1,4 @@
-// historialTest.js
-import { MongoClient } from "mongodb";
-
-const uri = "mongodb://root:secret123@localhost:27017/?authSource=admin";
-
-let client;
-
-async function conectarDB() {
-  if (!client) {
-    client = new MongoClient(uri);
-    await client.connect();
-    console.log(" Conectado a MongoDB");
-  }
-  return client.db("historialDB");
-}
-
-// -------------------------------------------------------
-// Función que registra un historial en MongoDB con parámetros
-// -------------------------------------------------------
-
-export async function registrarHistorial(db,
-titulo, areaTrabajo, descripcion) {
+export async function registrarHistorial(db, titulo, areaTrabajo, descripcion) {
     const db = await conectarDB();
     const historial = db.collection("historial");
 

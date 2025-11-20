@@ -3,7 +3,7 @@ const express = require("express");
 const router = express.Router();
 const { ObjectId } = require("mongodb");
 const { registrarHistorial } = require("../utils/historialTest.helper");
-
+//https://vasoliltdaapi.vercel.app/api/historial
 // Crear una notificación (para 1 usuario o grupo)
 router.post("/", async (req, res) => {
   try {
