@@ -1,5 +1,7 @@
+const { ObjectId } = require("mongodb");
+
+
 export async function registrarHistorial(db, titulo, areaTrabajo, descripcion) {
-    const db = await conectarDB();
     const historial = db.collection("historial");
 
     const data = {
