@@ -9,7 +9,7 @@ const MAIL_CREDENTIALS = {
   secure: true,
   auth: {
     user: "noreply@vasoli.cl",
-    pass: "Vasoli19",
+    pass: "Vasoli19.",
   },
 };
 
