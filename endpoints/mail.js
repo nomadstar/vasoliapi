@@ -2,7 +2,7 @@
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const helmet = require("helmet");
-const { sendEmail } = require("./mail.helper"); // Importamos la lógica
+const { sendEmail } = require("../utils/mail.helper"); // Importamos la lógica
 
 const router = express.Router();
 
