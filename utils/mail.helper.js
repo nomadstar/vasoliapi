@@ -47,8 +47,21 @@ function validarDestinatarios(raw) {
   if (!raw) return { error: "Campo 'to' requerido." };
   let lista = [];
 
-  if (Array.isArray(raw)) lista = raw;
-  else if (typeof raw === "string") {
+  // Aceptar array de strings o array de objetos { name, email }
+  if (Array.isArray(raw)) {
+    lista = raw
+      .map(item => {
+        if (!item) return "";
+        if (typeof item === "string") return item.trim();
+        if (typeof item === "object" && item.email) {
+          const email = String(item.email).trim();
+          if (item.name) return `${String(item.name).trim()} <${email}>`;
+          return email;
+        }
+        return "";
+      })
+      .filter(Boolean);
+  } else if (typeof raw === "string") {
     lista = raw.split(/\s*[;,]\s*/).map(s => s.trim()).filter(Boolean);
     if (lista.length === 0 && raw.trim()) lista = [raw.trim()];
   } else {
@@ -59,16 +72,26 @@ function validarDestinatarios(raw) {
     return { error: `Máximo ${MAX_RECIPIENTS} destinatarios permitidos.` };
 
   const parsed = [];
+  const invalid = [];
   for (const entry of lista) {
     // soporto "Name <email@dom>" o solo "email@dom"
     const match = entry.match(/<([^>]+)>/);
     const email = match ? match[1].trim() : entry.trim();
-    if (!isEmail(email)) return { error: `Email inválido: ${entry}` };
+    if (!isEmail(email)) {
+      invalid.push(entry);
+      continue;
+    }
     // conservo la forma original (para permitir Name <...>)
     parsed.push(entry.trim());
   }
 
-  return { lista: parsed };
+  if (parsed.length === 0) {
+    return {
+      error: `No hay destinatarios válidos.${invalid.length ? " Entradas inválidas: " + invalid.join(", ") : ""}`,
+    };
+  }
+
+  return { lista: parsed, invalid };
 }
 
 // --- FUNCIÓN PRINCIPAL EXPORTADA ---
@@ -89,13 +112,16 @@ const sendEmail = async ({ to, subject, html, text, from }) => {
   if (!html && !text) throw { status: 400, message: "Debe incluir 'html' o 'text'." };
 
   // 3. Construir opciones
+  const toField = valid.lista.join(", ").trim();
+  if (!toField) throw { status: 400, message: "No recipients definidos." };
+
   const mailOptions = {
     from: from || MAIL_CREDENTIALS.auth.user,
-    to: valid.lista.join(", "),
+    to: toField,
     subject,
     html,
     text,
-    envelope: { from: MAIL_CREDENTIALS.auth.user }, // fuerza MAIL FROM autenticado
+    envelope: { from: MAIL_CREDENTIALS.auth.user, to: valid.lista },
   };
 
   // 4. Enviar
