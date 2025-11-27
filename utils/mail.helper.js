@@ -21,13 +21,16 @@ const MAX_RECIPIENTS = 10;
 // --- INICIALIZACIÓN DEL TRANSPORTER ---
 const transporter = nodemailer.createTransport({
   host: MAIL_CREDENTIALS.host,
-  port: MAIL_CREDENTIALS.port,
-  secure: MAIL_CREDENTIALS.secure,
+  port: Number(process.env.SMTP_PORT || MAIL_CREDENTIALS.port),
+  secure:
+    process.env.SMTP_SECURE !== undefined
+      ? process.env.SMTP_SECURE === "true"
+      : MAIL_CREDENTIALS.secure,
   auth: MAIL_CREDENTIALS.auth,
   logger: true,
   debug: true,
+  authMethod: process.env.SMTP_AUTH_METHOD || undefined, // opcional: LOGIN/PLAIN
   tls: {
-    // Si el servidor tiene certificado autofirmado, usa "false" temporalmente:
     rejectUnauthorized:
       process.env.SMTP_REJECT_UNAUTHORIZED === "true" ? true : false,
   },
@@ -140,10 +143,28 @@ const sendEmail = async ({ to, subject, html, text, from }) => {
 
   // 4. Enviar
   try {
+    // log diagnóstico (sin exponer credenciales)
+    console.info("Enviando correo:", {
+      from: mailOptions.from,
+      to: mailOptions.envelope && mailOptions.envelope.to,
+      authUser: MAIL_CREDENTIALS.auth.user ? MAIL_CREDENTIALS.auth.user.replace(/(.{3}).+@/, "$1***@") : undefined,
+      host: MAIL_CREDENTIALS.host,
+      port: Number(process.env.SMTP_PORT || MAIL_CREDENTIALS.port),
+      secure: transporter.options.secure,
+      authMethod: transporter.options.authMethod,
+    });
+
     const info = await transporter.sendMail(mailOptions);
     return { ok: true, messageId: info.messageId, response: info.response };
   } catch (err) {
-    console.error("Error interno en Nodemailer:", err);
+    console.error("Error interno en Nodemailer:", {
+      message: err.message,
+      code: err.code,
+      response: err.response,
+      responseCode: err.responseCode,
+      command: err.command,
+      envelope: mailOptions.envelope,
+    });
     throw { status: 500, message: "Fallo interno al enviar correo." };
   }
 };
