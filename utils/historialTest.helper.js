@@ -35,3 +35,5 @@ if (process.argv[1].includes("historialTest.js")) {
 
   registrarHistorial(titulo, areaTrabajo, descripcion);
 }
+
+module.exports = { registrarHistorial };

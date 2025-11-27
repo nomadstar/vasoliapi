@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require("express");
 const cors = require("cors");
 const { MongoClient } = require("mongodb");
@@ -14,6 +15,9 @@ const noti = require("./endpoints/notificaciones");
 const menu = require("./endpoints/web");
 const plantillas = require("./endpoints/plantillas");
 const historial = require("./endpoints/historial");
+const googleDrive = require("./endpoints/googleDrive");
+
+
 
 const app = express();
 
@@ -35,7 +39,7 @@ if (MONGO_URI) {
 }
 
 async function connectDB() {
-  if (!MONGO_URI) return null;
+  if (!process.env.MONGO_URI) return null;
   if (!db) {
     await client.connect();
     db = client.db("Vasoli");
@@ -44,9 +48,13 @@ async function connectDB() {
   return db;
 }
 
-// Middleware para inyectar la base de datos en cada request
+// Middleware para inyectar la base de datos en cada request (si está configurada)
 app.use(async (req, res, next) => {
   try {
+    if (!process.env.MONGO_URI) {
+      req.db = null;
+      return next();
+    }
     req.db = await connectDB();
     next();
   } catch (err) {
@@ -68,6 +76,7 @@ app.use("/api/menu", menu);
 app.use("/api/plantillas", plantillas);
 app.use("/api/generador", gen);
 app.use("/api/historial", historial);
+app.use("/api/drive", googleDrive);
 
 
 // Ruta base
