@@ -61,7 +61,6 @@ router.put('/:id', async (req, res) => {
         
         // Limpiamos los IDs del cuerpo antes de $set
         delete updates.id; 
-        delete updates._id;
 
         const result = await req.db.collection(DEPARTMENTS_COLLECTION).findOneAndUpdate(
             { _id: new ObjectId(deptId) },
