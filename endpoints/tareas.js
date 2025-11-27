@@ -105,8 +105,9 @@ router.get('/tasks-by-email/:email', async (req, res) => {
         // Paso B: Extraer solo los nodos (tareas) que coincidan.
         // La consulta de Mongo devuelve el documento entero, necesitamos filtrar el array 'nodes' con JS.
         let tareasEncontradas = [];
-
+        let startDate = null;
         workflows.forEach(workflow => {
+            startDate = workflow.createdAt || null;
             // Filtramos los nodos internos que pertenecen a este departamento
             const nodosDelDepto = workflow.nodes.filter(node => 
                 node.department === targetDeptId && node.type === 'task' // Opcional: asegurar que sea tipo tarea
@@ -125,6 +126,7 @@ router.get('/tasks-by-email/:email', async (req, res) => {
         res.json({ 
             departamento: departamentDoc.name, 
             departamentoId: targetDeptId,
+            startDate: startDate || null,
             count: tareasEncontradas.length, 
             tareas: tareasEncontradas 
         });
