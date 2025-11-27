@@ -83,10 +83,12 @@ router.get('/tasks-by-email/:email', async (req, res) => {
         const departamento = usuario.departamento || usuario.empresa;
         if (!departamento) return res.status(404).json({ error: "Departamento no definido para el usuario" });
 
+        const departament = await req.db.collection("departamentos").findOne({"name":departamento});
+
         let query = {};
-        if (ObjectId.isValid(departamento)) {
-            const objId = new ObjectId(departamento);
-            query = { $or: [{ departmentId: objId }, { departamentoId: objId }, { departamento }] };
+        if (ObjectId.isValid(departament._id)) {
+            const objId = departament._id;
+            query = { $or: [{ department: objId }, { department: objId }, { departamento}] };
         } else {
             const re = new RegExp(departamento, 'i');
             query = { $or: [{ departamento }, { departamento: { $regex: re } }, { departmentName: { $regex: re } }] };

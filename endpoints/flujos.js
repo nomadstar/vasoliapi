@@ -141,5 +141,15 @@ router.get("/", async (req, res) => {
   }
 });
 
+router.get("/:mail", async (req, res) => {
+  try {
+    const workflows = await req.db.collection(WORKFLOW_COLLECTION).find().toArray();
+    res.json(workflows);
+  } catch (err) {
+    res.status(500).json({ error: "Error al obtener la lista de flujos" });
+  }
+});
+
+
 
 module.exports = router;
