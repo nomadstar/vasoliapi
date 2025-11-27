@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { MongoClient } = require("mongodb");
+const MONGO_URI = process.env.MONGO_URI || "";
 
 // Importar rutas
 const authRoutes = require("./endpoints/auth");
