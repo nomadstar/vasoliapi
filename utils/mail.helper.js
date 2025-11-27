@@ -15,6 +15,41 @@ function decodeB64(key) {
   }
 }
 
+// Detectar y decodificar si el usuario/clave fueron proporcionados en base64
+function isLikelyBase64(s) {
+  if (!s || typeof s !== "string") return false;
+  // cadenas base64 típicas: sólo A-Za-z0-9+/= y longitud mínima
+  return /^[A-Za-z0-9+/=]{8,}$/.test(s);
+}
+
+function readCredential({ b64Key, plainKey, type = "user" }) {
+  // 1) priorizar variable *_B64
+  const fromB64 = decodeB64(b64Key);
+  if (fromB64) return fromB64;
+
+  // 2) luego la variable plain; si parece base64, intentar decodificar
+  const raw = process.env[plainKey];
+  if (!raw) return undefined;
+  if (isLikelyBase64(raw) && !raw.includes("@") && type === "user") {
+    try {
+      const dec = Buffer.from(raw, "base64").toString("utf8");
+      return dec;
+    } catch (e) {
+      return raw;
+    }
+  }
+
+  if (isLikelyBase64(raw) && type === "pass") {
+    try {
+      return Buffer.from(raw, "base64").toString("utf8");
+    } catch (e) {
+      return raw;
+    }
+  }
+
+  return raw;
+}
+
 const MAIL_CREDENTIALS = {
   host: process.env.SMTP_HOST || "45.239.111.63",
   port: Number(process.env.SMTP_PORT) || 587,
@@ -24,8 +59,8 @@ const MAIL_CREDENTIALS = {
       ? process.env.SMTP_SECURE === "true"
       : false,
   auth: {
-    user: decodeB64("SMTP_USER_B64") || process.env.SMTP_USER || "bm9yZXBseUB2YXNvbGkuY2w=",
-    pass: decodeB64("SMTP_PASS_B64") || process.env.SMTP_PASS || "VmFzb2xpMTku",
+    user: readCredential({ b64Key: "SMTP_USER_B64", plainKey: "SMTP_USER", type: "user" }) || "noreply@vasoli.cl",
+    pass: readCredential({ b64Key: "SMTP_PASS_B64", plainKey: "SMTP_PASS", type: "pass" }) || "Vasoli19.",
   },
 };
 
