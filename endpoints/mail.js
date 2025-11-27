@@ -55,8 +55,21 @@ router.post("/send", async (req, res) => {
 
     const SMTP_HOST = process.env.SMTP_HOST || '45.239.111.63';
     const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-    const SMTP_USER = process.env.SMTP_USER || 'noreply@vasoli.cl';
-    const SMTP_PASS = process.env.SMTP_PASS || 'Vasoli19.';
+
+    // Decodificar variables base64 (prioritarias). Para simplicidad usamos B64.
+    const decodeB64 = (k) => {
+      const v = process.env[k];
+      if (!v) return undefined;
+      try { return Buffer.from(v, 'base64').toString('utf8'); } catch (e) { return undefined; }
+    };
+
+    const SMTP_USER = decodeB64('SMTP_USER_B64') || process.env.SMTP_USER;
+    const SMTP_PASS = decodeB64('SMTP_PASS_B64') || process.env.SMTP_PASS;
+
+    // Verificación temprana para evitar enviar credenciales vacías al servidor
+    if (!SMTP_USER || !SMTP_PASS) {
+      return res.status(400).json({ error: 'Faltan variables de entorno: SMTP_USER y/o SMTP_PASS' });
+    }
 
     const net = require('net');
     const tls = require('tls');
@@ -179,3 +192,20 @@ router.get("/debug/smtp", async (req, res) => {
     res.status(500).json({ error: err.message || String(err) });
   }
 });
+
+// Prioriza las variables B64 si existen, sino usa las normales
+function decodeEnvB64(keyB64, keyPlain) {
+  const b64 = process.env[keyB64];
+  if (b64 && b64.length) {
+    try {
+      return Buffer.from(b64, 'base64').toString('utf8');
+    } catch (err) {
+      console.warn(`Fallo al decodificar ${keyB64}:`, err && err.message);
+      return process.env[keyPlain] || '';
+    }
+  }
+  return process.env[keyPlain] || '';
+}
+
+const SMTP_USER = decodeEnvB64('SMTP_USER_B64', 'SMTP_USER');
+const SMTP_PASS = decodeEnvB64('SMTP_PASS_B64', 'SMTP_PASS');

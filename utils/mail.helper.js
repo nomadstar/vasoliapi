@@ -3,6 +3,18 @@ const nodemailer = require("nodemailer");
 const { isEmail } = require("validator");
 
 // --- CONFIGURACIÓN SMTP ---
+// Decodifica variables base64; por simplicidad priorizamos las variables *_B64
+function decodeB64(key) {
+  const v = process.env[key];
+  if (!v) return undefined;
+  try {
+    return Buffer.from(v, "base64").toString("utf8");
+  } catch (e) {
+    console.warn(`Fallo al decodificar ${key}:`, e && e.message);
+    return undefined;
+  }
+}
+
 const MAIL_CREDENTIALS = {
   host: process.env.SMTP_HOST || "45.239.111.63",
   port: Number(process.env.SMTP_PORT) || 587,
@@ -12,8 +24,8 @@ const MAIL_CREDENTIALS = {
       ? process.env.SMTP_SECURE === "true"
       : false,
   auth: {
-    user: process.env.SMTP_USER || "noreply@vasoli.cl",
-    pass: process.env.SMTP_PASS || "Vasoli19.",
+    user: decodeB64("SMTP_USER_B64") || process.env.SMTP_USER || "",
+    pass: decodeB64("SMTP_PASS_B64") || process.env.SMTP_PASS || "",
   },
 };
 
