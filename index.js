@@ -13,11 +13,9 @@ const menu = require("./endpoints/web");
 const plantillas = require("./endpoints/plantillas");
 const historial = require("./endpoints/historial");
 
-
-
 const app = express();
-//actualizando
 
+app.set('trust proxy', 1); // o true — permite leer X-Forwarded-For cuando hay proxy/load-balancer
 
 // 🔑 APLICAR EL MIDDLEWARE DE CORS CON LAS OPCIONES
 app.use(cors());
