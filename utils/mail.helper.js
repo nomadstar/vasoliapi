@@ -116,16 +116,25 @@ async function sendViaMailerSend({ from, envelopeTo, subject, html, text }) {
     body: JSON.stringify(payload),
   });
 
-  const data = await res.json().catch(() => ({}));
+  // leer body como text y luego intentar parsear JSON (si aplica)
+  const rawText = await res.text().catch(() => "");
+  let data = {};
+  try {
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch (e) {
+    data = { _raw: rawText };
+  }
+
   if (!res.ok) {
     const err = new Error('MailerSend API error');
     err.response = data;
+    err.raw = rawText;
     err.status = res.status;
     throw err;
   }
 
-  console.info('MailerSend API response:', { status: res.status, body: data });
-  return { ok: true, status: res.status, response: data };
+  console.info('MailerSend API response:', { status: res.status, body: data, raw: rawText });
+  return { ok: true, status: res.status, response: data, raw: rawText };
 }
 
 // --- INICIALIZACIÓN DEL TRANSPORTER ---
