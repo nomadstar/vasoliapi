@@ -134,5 +134,31 @@ router.get("/", async (req, res) => {
   }
 });
 
+router.get("/mini", async (req, res) => {
+  try {
+    // Usamos 'projection' para pedir SOLO name y supervisorId (y _id que viene por defecto)
+    const departments = await req.db.collection(DEPARTMENTS_COLLECTION)
+      .find({}, { 
+        projection: { 
+          name: 1, 
+          supervisorId: 1 
+        } 
+      })
+      .toArray();
+    
+    // Mapeo limpio para el frontend
+    const miniList = departments.map(dept => ({
+        id: dept._id.toString(),
+        name: dept.name,
+        supervisorId: dept.supervisorId
+    }));
+    
+    res.json(miniList);
+  } catch (err) {
+    console.error("Error al obtener la lista mini de departamentos:", err);
+    res.status(500).json({ error: "Error al cargar departamentos simplificados" });
+  }
+});
+
 
 module.exports = router;
