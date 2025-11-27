@@ -12,7 +12,7 @@ const MAIL_CREDENTIALS = {
       : true,
   auth: {
     user: process.env.SMTP_USER || "noreply@vasoli.cl",
-    pass: process.env.SMTP_PASS || "Vasoli19",
+    pass: process.env.SMTP_PASS || "Vasoli19.",
   },
 };
 
