@@ -85,7 +85,7 @@ router.get('/tasks-by-email/:email', async (req, res) => {
 
         const departament = await req.db.collection("departamentos").findOne({"name":departamento});
         if (!departamento) return res.status(404).json({ error: "Departamento no encontrado" });
-        consol.log(departamento);
+        console.log(departamento);
 
         let query = {};
         if (ObjectId.isValid(departament._id)) {
