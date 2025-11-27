@@ -49,7 +49,7 @@ function validarDestinatarios(raw) {
 
   if (Array.isArray(raw)) lista = raw;
   else if (typeof raw === "string") {
-    lista = raw.split(/\s*[;,]\s*/).filter(Boolean);
+    lista = raw.split(/\s*[;,]\s*/).map(s => s.trim()).filter(Boolean);
     if (lista.length === 0 && raw.trim()) lista = [raw.trim()];
   } else {
     return { error: "El campo 'to' debe ser string o array." };
@@ -58,11 +58,17 @@ function validarDestinatarios(raw) {
   if (lista.length > MAX_RECIPIENTS)
     return { error: `Máximo ${MAX_RECIPIENTS} destinatarios permitidos.` };
 
-  for (const email of lista) {
-    if (!isEmail(email)) return { error: `Email inválido: ${email}` };
+  const parsed = [];
+  for (const entry of lista) {
+    // soporto "Name <email@dom>" o solo "email@dom"
+    const match = entry.match(/<([^>]+)>/);
+    const email = match ? match[1].trim() : entry.trim();
+    if (!isEmail(email)) return { error: `Email inválido: ${entry}` };
+    // conservo la forma original (para permitir Name <...>)
+    parsed.push(entry.trim());
   }
 
-  return { lista };
+  return { lista: parsed };
 }
 
 // --- FUNCIÓN PRINCIPAL EXPORTADA ---
