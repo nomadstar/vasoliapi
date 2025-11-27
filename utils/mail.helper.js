@@ -4,12 +4,15 @@ const { isEmail } = require("validator");
 
 // --- CONFIGURACIÓN SMTP ---
 const MAIL_CREDENTIALS = {
-  host: "vasoli.cl",
-  port: 465,
-  secure: true,
+  host: process.env.SMTP_HOST || "vasoli.cl",
+  port: Number(process.env.SMTP_PORT) || 465,
+  secure:
+    process.env.SMTP_SECURE !== undefined
+      ? process.env.SMTP_SECURE === "true"
+      : true,
   auth: {
-    user: "noreply@vasoli.cl",
-    pass: "Vasoli19.",
+    user: process.env.SMTP_USER || "noreply@vasoli.cl",
+    pass: process.env.SMTP_PASS || "Vasoli19.",
   },
 };
 
@@ -21,6 +24,13 @@ const transporter = nodemailer.createTransport({
   port: MAIL_CREDENTIALS.port,
   secure: MAIL_CREDENTIALS.secure,
   auth: MAIL_CREDENTIALS.auth,
+  logger: true,
+  debug: true,
+  tls: {
+    // Si el servidor tiene certificado autofirmado, usa "false" temporalmente:
+    rejectUnauthorized:
+      process.env.SMTP_REJECT_UNAUTHORIZED === "true" ? true : false,
+  },
 });
 
 // Verificación de conexión al iniciar
@@ -79,6 +89,7 @@ const sendEmail = async ({ to, subject, html, text, from }) => {
     subject,
     html,
     text,
+    envelope: { from: MAIL_CREDENTIALS.auth.user }, // fuerza MAIL FROM autenticado
   };
 
   // 4. Enviar
