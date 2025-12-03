@@ -14,11 +14,11 @@
   "dependencies": {
     "cors": "^2.8.5",
     "docx": "^9.5.1",
+    "dotenv": "^16.6.1",
     "express": "^5.1.0",
-    "googleapis": "^131.0.0",
-    "dotenv": "^16.3.1",
     "express-rate-limit": "^8.1.0",
     "fs-extra": "^11.3.2",
+    "googleapis": "^131.0.0",
     "helmet": "^8.1.0",
     "mongodb": "^6.20.0",
     "multer": "^2.0.2",
