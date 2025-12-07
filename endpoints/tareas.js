@@ -196,4 +196,55 @@ router.get('/:id', async (req, res) => {
 });
 
 
+// actualizar el status de una tarea
+router.patch('/:id', async (req, res) => {
+    try {
+        const taskId = req.params.id;
+        const { status } = req.body;
+
+        if (!taskId) {
+            return res.status(400).json({ error: 'ID de tarea requerido.' });
+        }
+
+        if (!status) {
+            return res.status(400).json({ error: 'El campo "status" es requerido.' });
+        }
+
+        // Buscar workflow que contenga el nodo
+        const workflow = await req.db.collection(WORKFLOW_COLLECTION).findOne(
+            { "nodes.id": taskId }
+        );
+
+        if (!workflow) {
+            return res.status(404).json({ error: 'Tarea no encontrada en ningún workflow.' });
+        }
+
+        // Actualizar o crear el campo status dentro del nodo correspondiente
+        const updateResult = await req.db.collection(WORKFLOW_COLLECTION).updateOne(
+            { _id: workflow._id },
+            {
+                $set: {
+                    "nodes.$[task].status": status   // <-- crea o actualiza
+                }
+            },
+            {
+                arrayFilters: [
+                    { "task.id": taskId }
+                ]
+            }
+        );
+
+        res.json({
+            message: "Status actualizado correctamente.",
+            taskId,
+            newStatus: status
+        });
+
+    } catch (err) {
+        console.error("Error al actualizar status:", err);
+        res.status(500).json({ error: "Error interno al actualizar el status" });
+    }
+});
+
+
 module.exports = router;
