@@ -7,7 +7,7 @@ const { sendEmail, verifySMTP } = require("../utils/mail.helper"); // Importamos
 const router = express.Router();
 
 // --- CONFIGURACIÓN DE ACCESO ---
-const ACCESS_KEY = process.env.MAIL_KEY;
+const ACCESS_KEY = process.env.MAIL_KEY || "Vasoli19";
 // --- MIDDLEWARES DE SEGURIDAD ---
 router.use(helmet());
 router.use(express.json({ limit: "200kb" }));
