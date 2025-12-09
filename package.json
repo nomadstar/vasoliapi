@@ -21,6 +21,7 @@
     "googleapis": "^118.0.0",
     "helmet": "^7.1.0",
     "mongoose": "^8.0.3",
+    "multer": "^2.0.2",
     "nodemailer": "^6.9.7"
   },
   "devDependencies": {
