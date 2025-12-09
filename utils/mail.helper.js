@@ -3,7 +3,18 @@ const nodemailer = require('nodemailer');
 const { isEmail } = require('validator');
 const net = require('net');
 const tls = require('tls');
-const fetch = require('node-fetch'); // Requerir node-fetch explícitamente
+// Manejo de fetch: usar global.fetch si existe, si no, importar dinámicamente node-fetch (ESM)
+let _fetch;
+if (typeof global.fetch === 'function') {
+  _fetch = global.fetch.bind(global);
+} else {
+  // Proveedor asíncrono que importará node-fetch solo cuando se llame
+  _fetch = async (...args) => {
+    const mod = await import('node-fetch');
+    const fn = mod.default || mod;
+    return fn(...args);
+  };
+}
 
 // --- CONFIGURACIÓN SMTP ---
 function readCredential({ b64Key, plainKey }) {
@@ -51,7 +62,7 @@ async function sendViaMailerSend({ from, envelopeTo, subject, html, text }) {
   if (text) payload.text = text;
   if (html) payload.html = html;
 
-  const res = await fetch('https://api.mailersend.com/v1/email', {
+  const res = await _fetch('https://api.mailersend.com/v1/email', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -284,7 +295,7 @@ const debugManual = async (opts = {}) => {
   const sendCommand = (socket, command) => new Promise(async (resolve, reject) => { try { log.push(`C: ${command}`); socket.write(command + '\r\n'); const resp = await readResponse(socket); log.push(`S: ${resp.trim()}`); resolve(resp); } catch (err) { reject(err); } });
 
   try {
-    try { const ipRes = await fetch('https://api.ipify.org?format=json'); const { ip } = await ipRes.json(); log.push(`Testing from IP: ${ip}`); } catch (e) { log.push('Could not fetch public IP: ' + e.message); }
+    try { const ipRes = await _fetch('https://api.ipify.org?format=json'); const { ip } = await ipRes.json(); log.push(`Testing from IP: ${ip}`); } catch (e) { log.push('Could not fetch public IP: ' + e.message); }
 
     log.push(`Connecting to ${host}:${port}...`);
 
