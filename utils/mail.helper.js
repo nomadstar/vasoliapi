@@ -176,13 +176,13 @@ const sendEmail = async ({ to, subject, html, text, from }, smtpOverride = {}) =
   }
 
   const mailOptions = {
-    from: from || MAIL_CREDENTIALS.auth.user,
+    from: (from || (MAIL_CREDENTIALS.auth && MAIL_CREDENTIALS.auth.user)) || 'noreply@vasoli.cl',
     to: toField,
     subject,
     html,
     text,
     headers: { 'X-Vasoli-Sent-By': 'node-app' }, // Header para identificar envíos de Node
-    envelope: { from: MAIL_CREDENTIALS.auth.user, to: envelopeTo }
+    envelope: { from: (MAIL_CREDENTIALS.auth && MAIL_CREDENTIALS.auth.user) || 'noreply@vasoli.cl', to: envelopeTo }
   };
 
   console.log('Mail options preparados:', {

@@ -1,10 +1,22 @@
 /**
  * Mockear utils/mail.helper antes de requerir la app para evitar llamadas SMTP reales
- */
+
+*/
+
+const fs = require('dotenv').config();
+
 jest.mock('../utils/mail.helper', () => ({
   sendEmail: jest.fn(),
   debugManual: jest.fn()
 }));
+
+// Set up environment variables before requiring the app
+
+
+console.log('Test environment variables set:', {
+  SMTP_USER: process.env.SMTP_USER,
+  SMTP_PASS: process.env.SMTP_PASS ? '***' : undefined
+});
 
 const request = require('supertest');
 const mailHelper = require('../utils/mail.helper');
@@ -20,6 +32,7 @@ describe('Mail Endpoint - Vasoli.cl Priority', () => {
 
   it('debe rechazar sin accessKey válida', async () => {
     const emailData = {
+      from:'noreply@vasoli.cl',
       to: 'ignacio.marambio.z@gmail.com',
       subject: 'Test Email',
       text: 'Este es un correo de prueba.'
