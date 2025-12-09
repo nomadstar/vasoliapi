@@ -3,40 +3,25 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const helmet = require("helmet");
 const { sendEmail, verifySMTP, debugManual } = require("../utils/mail.helper");
-const fs = require("dotenv").config();
+require('dotenv').config();
 
 const router = express.Router();
 
 // --- CONFIGURACIÓN DE ACCESO ---
 const ACCESS_KEY = process.env.MAIL_KEY || "Vasoli19";
 
-console.log('All SMTP-related env vars:');
-console.log(`SMTP_USER: ${process.env.SMTP_USER}`);
-console.log(`SMTP_PASS: ${process.env.SMTP_PASS}`);
-console.log(`SMTP_USER_B64: ${process.env.SMTP_USER_B64}`);
-console.log(`SMTP_PASS_B64: ${process.env.SMTP_PASS_B64}`);
-console.log(`SMTP_HOST: ${process.env.SMTP_HOST}`);
-console.log(`SMTP_PORT: ${process.env.SMTP_PORT}`);
-
 // --- HELPER: Decodificar variables B64 ---
 function decodeEnvB64(keyB64, keyPlain) {
   const b64 = process.env[keyB64];
   const plain = process.env[keyPlain];
-  
-  console.log(`decodeEnvB64: ${keyB64}=${b64 ? '"' + b64 + '"' : '[NOT SET]'}, ${keyPlain}=${plain ? '"' + plain + '"' : '[NOT SET]'}`);
-  
   if (b64 && b64.trim().length > 0) {
     try {
-      const decoded = Buffer.from(b64.trim(), 'base64').toString('utf8');
-      console.log(`decodeEnvB64: Decoded ${keyB64} to: ${decoded}`);
-      return decoded;
+      return Buffer.from(b64.trim(), 'base64').toString('utf8');
     } catch (err) {
       console.warn(`Fallo al decodificar ${keyB64}:`, err && err.message);
-      console.log(`decodeEnvB64: Falling back to ${keyPlain}: ${plain || '[NOT SET]'}`);
       return plain || '';
     }
   }
-  console.log(`decodeEnvB64: Using plain ${keyPlain}: ${plain || '[NOT SET]'}`);
   return plain || '';
 }
 
@@ -46,11 +31,7 @@ const SMTP_PASS = decodeEnvB64('SMTP_PASS_B64', 'SMTP_PASS');
 const SMTP_HOST = process.env.SMTP_HOST_VASOLI || process.env.SMTP_HOST || 'mail.vasoli.cl';
 const SMTP_PORT = Number(process.env.SMTP_PORT_VASOLI || process.env.SMTP_PORT || 465);
 
-console.log('SMTP Configuration loaded:');
-console.log(`SMTP_USER: ${SMTP_USER ? '[SET]' : '[EMPTY]'}`);
-console.log(`SMTP_PASS: ${SMTP_PASS ? '[SET]' : '[EMPTY]'}`);
-console.log(`SMTP_HOST: ${SMTP_HOST}`);
-console.log(`SMTP_PORT: ${SMTP_PORT}`);
+// (No logging here — logs are emitted only per-request when debug is explicitly requested)
 
 // --- MIDDLEWARES DE SEGURIDAD ---
 router.use(helmet());
@@ -67,23 +48,25 @@ router.use(limiter);
 // --- ENDPOINT: Enviar email ---
 router.post("/send", async (req, res) => {
   try {
-    const { accessKey, ...emailData } = req.body || {};
+    const { accessKey, debug, ...emailData } = req.body || {};
 
     // Validación de seguridad (API Key)
     if (accessKey !== ACCESS_KEY) {
       return res.status(401).json({ error: "Clave de acceso inválida." });
     }
 
+    const debugFlag = !!debug;
+
     // Intenta vasoli.cl primero, si falla usa la instancia de API
     let result;
     try {
-      result = await sendEmail(emailData, { host: SMTP_HOST, port: SMTP_PORT, user: SMTP_USER, pass: SMTP_PASS });
+      result = await sendEmail(emailData, { host: SMTP_HOST, port: SMTP_PORT, user: SMTP_USER, pass: SMTP_PASS, debug: debugFlag, accessKey });
     } catch (vasoliError) {
-      console.warn('Error enviando por vasoli.cl, intentando instancia de API:', vasoliError.message);
-      // Fallback a la instancia de API
-      result = await sendEmail(emailData);
+      if (debugFlag) console.warn('Error enviando por vasoli.cl, intentando instancia de API:', vasoliError && vasoliError.message);
+      // Fallback a la instancia de API (no debug forwarded)
+      result = await sendEmail(emailData, { debug: debugFlag, accessKey });
     }
-    
+
     res.json(result);
 
   } catch (err) {
@@ -102,7 +85,7 @@ router.get("/debug/smtp", async (req, res) => {
     const accessKey = req.query.accessKey || req.headers["x-access-key"];
     if (accessKey !== ACCESS_KEY) return res.status(401).json({ error: "Clave de acceso inválida." });
 
-    const result = await verifySMTP();
+    const result = await verifySMTP({ host: SMTP_HOST, port: SMTP_PORT, user: SMTP_USER, pass: SMTP_PASS, debug: true, accessKey });
     res.json({ ok: true, verified: result });
   } catch (err) {
     console.error("Error en /debug/smtp:", err);
@@ -126,7 +109,7 @@ router.get('/debug/manual', async (req, res) => {
   }
 
   try {
-    const result = await debugManual({ host, port, user, pass });
+    const result = await debugManual({ host, port, user, pass, debug: true, accessKey });
     return res.status(200).json(result);
   } catch (err) {
     console.error('Error en /debug/manual:', err);

@@ -21,13 +21,27 @@ function readCredential({ b64Key, plainKey }) {
   const b64Env = process.env[b64Key];
   if (b64Env !== undefined) {
     if (String(b64Env).trim()) {
-      try { return Buffer.from(b64Env, 'base64').toString('utf8'); } catch (e) { console.warn(`Fallo al decodificar ${b64Key}:`, e && e.message); }
+      try { return Buffer.from(b64Env, 'base64').toString('utf8'); } catch (e) { /* omit noisy log */ }
     }
     return undefined;
   }
   const raw = process.env[plainKey];
   if (!raw) return undefined;
   return raw;
+}
+
+function shouldDebug(override = {}) {
+  try {
+    if (!override || !override.debug) return false;
+    const providedKey = override.accessKey || override.access_key || override.access || null;
+    if (!providedKey) return false;
+    const expectedKey = process.env.ACCESS_KEY || process.env.MAIL_KEY || process.env.MAIL_KEY_OLD || null;
+    if (!expectedKey) return false;
+    if (providedKey !== expectedKey) return false;
+    // Only allow debug when SMTP password is available (avoid leaking secrets)
+    if (!(MAIL_CREDENTIALS && MAIL_CREDENTIALS.auth && MAIL_CREDENTIALS.auth.pass)) return false;
+    return true;
+  } catch (e) { return false; }
 }
 
 const MAIL_CREDENTIALS = {
@@ -98,18 +112,20 @@ function createTransporter(override = {}) {
     auth: authUser && authPass ? { user: authUser, pass: authPass } : undefined,
     authMethod: process.env.SMTP_AUTH_METHOD || 'LOGIN',
     tls: { rejectUnauthorized: process.env.SMTP_REJECT_UNAUTHORIZED === 'true' ? true : false },
-    logger: true, debug: true,
+    logger: shouldDebug(override), debug: shouldDebug(override),
   };
 
-  console.log('Creando transporter SMTP con configuración:', {
-    host,
-    port,
-    secure,
-    requireTLS,
-    hasAuth: !!(authUser && authPass),
-    authMethod: transporterOpts.authMethod,
-    tlsRejectUnauthorized: transporterOpts.tls.rejectUnauthorized
-  });
+  if (shouldDebug(override)) {
+    console.log('Creando transporter SMTP con configuración:', {
+      host,
+      port,
+      secure,
+      requireTLS,
+      hasAuth: !!(authUser && authPass),
+      authMethod: transporterOpts.authMethod,
+      tlsRejectUnauthorized: transporterOpts.tls.rejectUnauthorized
+    });
+  }
 
   return nodemailer.createTransport(transporterOpts);
 }
@@ -146,20 +162,20 @@ function validarDestinatarios(raw) {
 }
 
 const sendEmail = async ({ to, subject, html, text, from }, smtpOverride = {}) => {
-  console.log('=== INICIANDO ENVÍO DE EMAIL ===');
-  console.log('Parámetros recibidos:', { to, subject, from, hasHtml: !!html, hasText: !!text });
+  if (shouldDebug(smtpOverride)) console.log('=== INICIANDO ENVÍO DE EMAIL ===');
+  if (shouldDebug(smtpOverride)) console.log('Parámetros recibidos:', { to, subject, from, hasHtml: !!html, hasText: !!text });
 
   const valid = validarDestinatarios(to);
   if (valid.error) {
-    console.log('Error en validación de destinatarios:', valid.error);
+    if (shouldDebug(smtpOverride)) console.log('Error en validación de destinatarios:', valid.error);
     throw { status: 400, message: valid.error };
   }
   if (!subject) {
-    console.log('Error: subject requerido');
+    if (shouldDebug(smtpOverride)) console.log('Error: subject requerido');
     throw { status: 400, message: "Campo 'subject' requerido." };
   }
   if (!html && !text) {
-    console.log('Error: html o text requerido');
+    if (shouldDebug(smtpOverride)) console.log('Error: html o text requerido');
     throw { status: 400, message: "Debe incluir 'html' o 'text'." };
   }
 
@@ -185,7 +201,7 @@ const sendEmail = async ({ to, subject, html, text, from }, smtpOverride = {}) =
     envelope: { from: (MAIL_CREDENTIALS.auth && MAIL_CREDENTIALS.auth.user) || 'noreply@vasoli.cl', to: envelopeTo }
   };
 
-  console.log('Mail options preparados:', {
+  if (shouldDebug(smtpOverride)) console.log('Mail options preparados:', {
     from: mailOptions.from,
     to: mailOptions.to,
     subject: mailOptions.subject,
@@ -195,35 +211,34 @@ const sendEmail = async ({ to, subject, html, text, from }, smtpOverride = {}) =
 
   try {
     if (smtpOverride && Object.keys(smtpOverride).length) {
-      console.log('Usando configuración SMTP override:', smtpOverride);
+      if (shouldDebug(smtpOverride)) console.log('Usando configuración SMTP override:', smtpOverride);
       const t = createTransporter(smtpOverride);
-      console.log('Enviando email con transporter override...');
+      if (shouldDebug(smtpOverride)) console.log('Enviando email con transporter override...');
       const info = await t.sendMail(mailOptions);
-      console.log('Email enviado exitosamente con override:', { messageId: info.messageId, response: info.response });
+      if (shouldDebug(smtpOverride)) console.log('Email enviado exitosamente con override:', { messageId: info.messageId, response: info.response });
       return { ok: true, provider: 'smtp', messageId: info.messageId, response: info.response };
     }
 
     if (process.env.MAILERSEND_API_KEY || process.env.API_KEY) {
-      console.log('Intentando envío vía MailerSend API...');
+      if (shouldDebug(smtpOverride)) console.log('Intentando envío vía MailerSend API...');
       try {
         const apiRes = await sendViaMailerSend({ from: mailOptions.from, envelopeTo: mailOptions.envelope.to, subject, html, text });
-        console.log('Email enviado exitosamente vía MailerSend:', { status: apiRes.status, response: apiRes.response });
+        if (shouldDebug(smtpOverride)) console.log('Email enviado exitosamente vía MailerSend:', { status: apiRes.status, response: apiRes.response });
         return { ok: true, provider: 'mailersend', status: apiRes.status, response: apiRes.response };
       }
       catch (apiErr) {
-        console.warn('Envio vía MailerSend API falló, intentando SMTP. Error:', apiErr && (apiErr.message || apiErr.status));
+        if (shouldDebug(smtpOverride)) console.warn('Envio vía MailerSend API falló, intentando SMTP. Error:', apiErr && (apiErr.message || apiErr.status));
       }
     }
-
-    console.log('Intentando envío vía SMTP por defecto...');
+    if (shouldDebug(smtpOverride)) console.log('Intentando envío vía SMTP por defecto...');
     const defaultTransporter = createTransporter();
-    console.log('Transporter creado, enviando email...');
+    if (shouldDebug(smtpOverride)) console.log('Transporter creado, enviando email...');
     const info = await defaultTransporter.sendMail(mailOptions);
-    console.log('Email enviado exitosamente vía SMTP:', { messageId: info.messageId, response: info.response });
+    if (shouldDebug(smtpOverride)) console.log('Email enviado exitosamente vía SMTP:', { messageId: info.messageId, response: info.response });
     return { ok: true, provider: 'smtp', messageId: info.messageId, response: info.response };
   } catch (err) {
-    console.error('=== ERROR EN ENVÍO DE EMAIL ===');
-    console.error('Error interno en Nodemailer:', {
+    if (shouldDebug(smtpOverride)) console.error('=== ERROR EN ENVÍO DE EMAIL ===');
+    if (shouldDebug(smtpOverride)) console.error('Error interno en Nodemailer:', {
       message: err && err.message,
       code: err && err.code,
       response: err && err.response,
@@ -233,19 +248,18 @@ const sendEmail = async ({ to, subject, html, text, from }, smtpOverride = {}) =
     });
 
     if (err && err.responseCode === 550 && err.command === 'MAIL FROM') {
-      console.log('Intentando fallback con STARTTLS...');
+      if (shouldDebug(smtpOverride)) console.log('Intentando fallback con STARTTLS...');
       try {
         const altTransporter = createTransporter({ port: Number(process.env.FALLBACK_SMTP_PORT || 587), secure: false, requireTLS: true });
         const info2 = await altTransporter.sendMail(mailOptions);
-        console.log('Email enviado exitosamente con fallback STARTTLS:', { messageId: info2.messageId, response: info2.response });
+        if (shouldDebug(smtpOverride)) console.log('Email enviado exitosamente con fallback STARTTLS:', { messageId: info2.messageId, response: info2.response });
         return { ok: true, messageId: info2.messageId, response: info2.response, fallback: true };
       }
       catch (err2) {
-        console.error('Reintento con STARTTLS falló:', err2 && err2.message);
+        if (shouldDebug(smtpOverride)) console.error('Reintento con STARTTLS falló:', err2 && err2.message);
       }
     }
-
-    console.error('Envío fallido definitivamente');
+    if (shouldDebug(smtpOverride)) console.error('Envío fallido definitivamente');
     throw { status: 500, message: 'Fallo interno al enviar correo.' };
   }
 };
