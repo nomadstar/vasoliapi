@@ -228,8 +228,6 @@ router.get('/templates/usage', async (req, res) => {
   }
 });
 
-module.exports = router;
-
 // GET /tasks/status-summary - resumen de estados: completadas, atrasadas, postergadas, pendientes
 router.get('/tasks/status-summary', async (req, res) => {
   try {
@@ -417,3 +415,5 @@ router.get('/export/tasks/status-summary', async (req, res) => {
     return res.status(500).json({ error: 'Error generando export CSV' });
   }
 });
+
+module.exports = router;
