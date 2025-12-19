@@ -48,6 +48,9 @@ function saveTokens(tokens) {
 
 function getOAuth2Client(redirectUri) {
   const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI } = process.env;
+  if (!CLIENT_ID || !CLIENT_SECRET) {
+    throw new Error('Faltan variables de entorno CLIENT_ID y/o CLIENT_SECRET para Google Drive');
+  }
   const uri = redirectUri || REDIRECT_URI;
   return new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, uri);
 }
@@ -160,10 +163,35 @@ router.get('/list', async (req, res) => {
     res.json({ ok: true, files: response.data.files || [] });
   } catch (err) {
     console.error('Drive list error:', err.message || err);
+    
+    // Error de configuración
+    if (err.message && err.message.includes('Faltan variables de entorno')) {
+      return res.status(500).json({ 
+        ok: false, 
+        error: 'Google Drive no configurado correctamente. Faltan CLIENT_ID y/o CLIENT_SECRET en variables de entorno.' 
+      });
+    }
+    
+    // Error de autorización
+    if (err.message && err.message.includes('No hay tokens guardados')) {
+      return res.status(401).json({ 
+        ok: false, 
+        error: 'Google Drive no autorizado. Visita /api/drive/auth para autorizar.',
+        auth_url: '/api/drive/auth'
+      });
+    }
+    
+    // Error de permisos
     if (isInsufficientPermissionError(err)) {
       const reauth = makeReauthUrl();
-      return res.status(403).json({ ok: false, error: 'Insufficient Permission. Reauthorize the app.', reauth_url: reauth });
+      return res.status(403).json({ 
+        ok: false, 
+        error: 'Insufficient Permission. Reauthorize the app.', 
+        reauth_url: reauth 
+      });
     }
+    
+    // Error genérico
     res.status(500).json({ ok: false, error: err.message || String(err) });
   }
 });
