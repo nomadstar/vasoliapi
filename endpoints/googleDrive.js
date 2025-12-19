@@ -22,6 +22,19 @@ function ensureDataDir() {
 }
 
 function loadSavedTokens() {
+  // Primero intenta cargar desde variables de entorno (para producción)
+  if (process.env.GOOGLE_ACCESS_TOKEN) {
+    return {
+      access_token: process.env.GOOGLE_ACCESS_TOKEN,
+      refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+      scope: process.env.GOOGLE_TOKEN_SCOPE,
+      token_type: process.env.GOOGLE_TOKEN_TYPE || 'Bearer',
+      refresh_token_expires_in: parseInt(process.env.GOOGLE_REFRESH_TOKEN_EXPIRES_IN) || 604799,
+      expiry_date: parseInt(process.env.GOOGLE_EXPIRY_DATE)
+    };
+  }
+
+  // Fallback: cargar desde archivo (para desarrollo local)
   try {
     if (fs.existsSync(TOKEN_PATH)) {
       const raw = fs.readFileSync(TOKEN_PATH, 'utf8');
@@ -38,9 +51,17 @@ function loadSavedTokens() {
 }
 
 function saveTokens(tokens) {
+  // En producción (Vercel), no podemos escribir archivos, 
+  // así que solo guardamos localmente en desarrollo
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    console.log('Tokens no se pueden guardar en archivo en producción. Usa variables de entorno.');
+    return;
+  }
+
   try {
     ensureDataDir();
     fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2), 'utf8');
+    console.log('Tokens guardados localmente en:', TOKEN_PATH);
   } catch (e) {
     console.error('Error guardando tokens:', e.message || e);
   }
