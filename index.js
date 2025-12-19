@@ -37,8 +37,37 @@ const app = express();
 
 app.set('trust proxy', 1); // permite leer X-Forwarded-For cuando hay proxy/load-balancer
 
-// 🔑 APLICAR EL MIDDLEWARE DE CORS CON LAS OPCIONES
-app.use(cors());
+// 🔑 CORS con credenciales y lista blanca
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:3000,https://vasoliweb-production.up.railway.app')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Permite requests de same-origin (curl/local) donde origin es undefined
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'), false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+// Refuerza los headers CORS para respuestas con credenciales
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Vary', 'Origin');
+  }
+  next();
+});
 
 app.use(express.json());
 
