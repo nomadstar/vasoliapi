@@ -3,5 +3,4 @@ node_modules
 .env.local
 .env.*.local
 # token and runtime data
-data/
 client_secret_660384796906-1g6254udvoj52qdc6o8rcsriq9e781v5.apps.googleusercontent.com
