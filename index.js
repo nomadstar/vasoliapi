@@ -38,20 +38,26 @@ const app = express();
 app.set('trust proxy', 1); // permite leer X-Forwarded-For cuando hay proxy/load-balancer
 
 // 🔑 CORS con credenciales y lista blanca
-const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:3000,https://vasoliweb-production.up.railway.app,https://vasoliltdaapi.vercel.app')
-  .split(',')
-  .map(o => o.trim())
-  .filter(Boolean);
+const allowAll = (String(process.env.CORS_ALLOW_ALL || '').toLowerCase() === 'true');
+const envFrontend = (process.env.FRONTEND_URL || '').trim();
+const defaultOrigins = 'http://localhost:5173,http://localhost:3000,https://vasoliweb-production.up.railway.app,https://vasoliltdaapi.vercel.app';
+const allowedOrigins = allowAll
+  ? ['*']
+  : (process.env.CORS_ORIGINS || (envFrontend ? envFrontend + ',' + defaultOrigins : defaultOrigins))
+      .split(',')
+      .map(o => o.trim())
+      .filter(Boolean);
 
 const corsOptions = {
   origin: (origin, callback) => {
     // Permite requests de same-origin (curl/local) donde origin es undefined
     if (!origin) return callback(null, true);
+    if (allowAll) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
     console.error(`CORS blocked origin: ${origin}. Allowed origins:`, allowedOrigins);
     return callback(new Error('Not allowed by CORS'), false);
   },
-  credentials: true,
+  credentials: !allowAll, // no usar credenciales cuando se permite cualquier origen
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-access-key', 'X-Requested-With'],
   preflightContinue: false,
@@ -61,10 +67,14 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// Refuerza los headers CORS para respuestas con credenciales
+// Refuerza los headers CORS (para entornos donde queremos controlar el header explicitamente)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && allowedOrigins.includes(origin)) {
+  if (allowAll) {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-access-key, X-Requested-With');
+  } else if (origin && allowedOrigins.includes(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
