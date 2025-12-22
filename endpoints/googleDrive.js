@@ -652,4 +652,151 @@ router.post('/create-folder', async (req, res) => {
   }
 });
 
+// -------------------------
+// Nuevos helpers y endpoints: browse / download-by-path / delete-by-path
+// -------------------------
+async function resolveFolderByPath(drive, startFolderId, relPath) {
+  if (!relPath || relPath === '' || relPath === '/') return startFolderId || 'root';
+  const parts = relPath.split('/').filter(Boolean);
+  let parent = startFolderId || (startFolderId === '' ? 'root' : 'root');
+  for (const part of parts) {
+    const q = `'${parent}' in parents and name = '${part.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+    const res = await drive.files.list({ q, fields: 'files(id,name)', pageSize: 5, supportsAllDrives: true, includeItemsFromAllDrives: true });
+    const files = res.data.files || [];
+    if (files.length === 0) return null;
+    parent = files[0].id; // toma el primer match (mejor esfuerzo)
+  }
+  return parent;
+}
+
+async function listFolderChildren(drive, folderId) {
+  const q = `'${folderId}' in parents and trashed = false`;
+  const res = await drive.files.list({
+    q,
+    pageSize: 200,
+    fields: 'nextPageToken, files(id, name, mimeType, size, modifiedTime, parents, webViewLink, webContentLink)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true
+  });
+  return res.data.files || [];
+}
+
+// GET /api/drive/browse?folderId=... OR ?path=/A/B&startFromUrl=1
+router.get('/browse', async (req, res) => {
+  try {
+    const auth = await ensureAuthClient();
+    const drive = google.drive({ version: 'v3', auth });
+
+    const folderIdParam = req.query.folderId;
+    const folderUrlParam = req.query.folderUrl;
+    const startFromEnv = extractFolderId(folderUrlParam) || extractFolderId(process.env.DRIVE_FOLDER_URL) || 'root';
+    const path = req.query.path; // ruta relativa: "Carpeta/Subcarpeta"
+
+    let folderId = folderIdParam || startFromEnv;
+
+    if (path) {
+      const resolved = await resolveFolderByPath(drive, folderId, path);
+      if (!resolved) return res.status(404).json({ ok: false, error: 'Ruta no encontrada' });
+      folderId = resolved;
+    }
+
+    const children = await listFolderChildren(drive, folderId);
+    return res.json({ ok: true, folderId, path: path || null, children });
+  } catch (err) {
+    console.error('Drive browse error:', err.message || err);
+    if (isInsufficientPermissionError(err)) {
+      return res.status(403).json({ ok: false, error: 'Permisos insuficientes. Reautoriza en /api/drive/auth', reauth_url: makeReauthUrl() });
+    }
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+// GET /api/drive/download-by-path?path=/A/B/file.txt OR ?fileId=...
+router.get('/download-by-path', async (req, res) => {
+  try {
+    const auth = await ensureAuthClient();
+    const drive = google.drive({ version: 'v3', auth });
+
+    const fileId = req.query.fileId;
+    const path = req.query.path; // ej: "Carpeta/Subcarpeta/archivo.txt"
+    if (fileId) {
+      const meta = await drive.files.get({ fileId, fields: 'id,name,mimeType,size', supportsAllDrives: true });
+      const streamRes = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'stream' });
+      res.setHeader('Content-Type', meta.data.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${meta.data.name || fileId}"`);
+      return streamRes.data.pipe(res);
+    }
+
+    if (!path) return res.status(400).json({ ok: false, error: 'Se requiere fileId o path' });
+
+    const parts = path.split('/').filter(Boolean);
+    const fileName = parts.pop();
+    const parentPath = parts.join('/');
+    const startFromEnv = extractFolderId(process.env.DRIVE_FOLDER_URL) || 'root';
+    const parentId = parentPath ? await resolveFolderByPath(drive, startFromEnv, parentPath) : startFromEnv;
+    if (!parentId) return res.status(404).json({ ok: false, error: 'Ruta padre no encontrada' });
+
+    const q = `'${parentId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
+    const found = await drive.files.list({ q, fields: 'files(id,name,mimeType,size)', pageSize: 5, supportsAllDrives: true, includeItemsFromAllDrives: true });
+    const files = found.data.files || [];
+    if (files.length === 0) return res.status(404).json({ ok: false, error: 'Archivo no encontrado' });
+
+    const target = files[0];
+    const streamRes = await drive.files.get({ fileId: target.id, alt: 'media' }, { responseType: 'stream' });
+    res.setHeader('Content-Type', target.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${target.name}"`);
+    return streamRes.data.pipe(res);
+  } catch (err) {
+    console.error('Drive download-by-path error:', err.message || err);
+    if (isInsufficientPermissionError(err)) {
+      return res.status(403).json({ ok: false, error: 'Permisos insuficientes. Reautoriza en /api/drive/auth', reauth_url: makeReauthUrl() });
+    }
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+// DELETE /api/drive/delete-by-path?path=/A/B OR ?folderId=...
+async function deleteFolderRecursive(drive, folderId) {
+  // listar hijos
+  const q = `'${folderId}' in parents and trashed = false`;
+  const res = await drive.files.list({ q, fields: 'files(id,name,mimeType)', pageSize: 500, supportsAllDrives: true, includeItemsFromAllDrives: true });
+  const children = res.data.files || [];
+  for (const c of children) {
+    if (c.mimeType === 'application/vnd.google-apps.folder') {
+      await deleteFolderRecursive(drive, c.id);
+    } else {
+      try { await drive.files.delete({ fileId: c.id, supportsAllDrives: true }); } catch (e) { console.warn('delete child file failed', c.id, e.message || e); }
+    }
+  }
+  // borrar la carpeta final
+  try { await drive.files.delete({ fileId: folderId, supportsAllDrives: true }); } catch (e) { console.warn('delete folder failed', folderId, e.message || e); }
+}
+
+router.delete('/delete-by-path', async (req, res) => {
+  try {
+    const auth = await ensureAuthClient();
+    const drive = google.drive({ version: 'v3', auth });
+
+    const folderIdParam = req.query.folderId;
+    const path = req.query.path; // /A/B/C
+    let folderId = folderIdParam || null;
+    if (!folderId) {
+      if (!path) return res.status(400).json({ ok: false, error: 'Se requiere folderId o path' });
+      const startFromEnv = extractFolderId(process.env.DRIVE_FOLDER_URL) || 'root';
+      const resolved = await resolveFolderByPath(drive, startFromEnv, path);
+      if (!resolved) return res.status(404).json({ ok: false, error: 'Ruta no encontrada' });
+      folderId = resolved;
+    }
+
+    await deleteFolderRecursive(drive, folderId);
+    return res.json({ ok: true, deleted: folderId });
+  } catch (err) {
+    console.error('Drive delete-by-path error:', err.message || err);
+    if (isInsufficientPermissionError(err)) {
+      return res.status(403).json({ ok: false, error: 'Permisos insuficientes. Reautoriza en /api/drive/auth', reauth_url: makeReauthUrl() });
+    }
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
 module.exports = router;
