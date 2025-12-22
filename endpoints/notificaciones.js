@@ -46,6 +46,7 @@ router.get('/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     // Intentos de búsqueda flexibles: ObjectId, string _id, id, mail o nombre
+    if (!req.db) return res.status(503).json({ error: 'Servicio no disponible: base de datos no conectada' });
     const collection = req.db.collection('usuarios');
 
     let usuario = null;
@@ -113,7 +114,14 @@ router.get('/user/:userId', async (req, res) => {
       matchConditions.push({ 'nodes.owner': usuario.id }, { 'nodes.assignedTo': usuario.id }, { 'nodes.userId': usuario.id });
     }
 
-    const workflows = await wfCol.find({ $or: matchConditions }).toArray();
+    let workflows = [];
+    try {
+      // Limitar la búsqueda para evitar escaneos largos en producción
+      workflows = await wfCol.find({ $or: matchConditions }).maxTimeMS(5000).limit(200).toArray();
+    } catch (e) {
+      console.error('notificaciones: error consultando workflows (se devolvieron 0):', e && e.message);
+      workflows = [];
+    }
 
     const dynamicNotis = [];
 
@@ -238,6 +246,39 @@ router.get('/user/:userId', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al obtener notificaciones' });
+  }
+});
+
+// Endpoint rápido y seguro para debug: intenta devolver notificaciones con consultas acotadas
+router.get('/quick/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!req.db) return res.status(503).json({ error: 'Servicio no disponible: base de datos no conectada' });
+
+    const users = req.db.collection('usuarios');
+    const wfCol = req.db.collection('flujos');
+
+    // 1) Intento rápido por _id ObjectId
+    let usuario = null;
+    if (ObjectId.isValid(userId)) {
+      const rows = await users.find({ _id: new ObjectId(userId) }).project({ notificaciones: 1, mail: 1, id: 1, departamento: 1 }).maxTimeMS(2000).limit(1).toArray();
+      usuario = rows && rows[0];
+    }
+
+    // 2) Intento por mail o id corto
+    if (!usuario) {
+      const rows = await users.find({ $or: [{ mail: userId }, { id: userId }, { nombre: userId }] }).project({ notificaciones: 1, mail: 1, id: 1, departamento: 1 }).maxTimeMS(2000).limit(1).toArray();
+      usuario = rows && rows[0];
+    }
+
+    if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado (quick)' });
+
+    // Devolver solo las notificaciones guardadas; esto evita agregaciones pesadas
+    const existing = usuario.notificaciones || [];
+    return res.json({ quick: true, count: existing.length, notificaciones: existing });
+  } catch (err) {
+    console.error('notificaciones.quick error:', err && err.message);
+    return res.status(500).json({ error: 'Error en quick lookup', detalles: err && err.message });
   }
 });
 
