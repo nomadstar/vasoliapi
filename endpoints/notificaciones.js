@@ -94,6 +94,29 @@ router.get('/user/:userId', async (req, res) => {
       }
     }
 
+    function escapeRegExp(str) {
+      return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    // Resolver departamento (nombre y posible _id) para notificaciones por departamento
+    const userDeptName = usuario.departamento || usuario.empresa || null;
+    let deptMatchValues = [];
+    if (userDeptName) {
+      deptMatchValues.push(userDeptName);
+      try {
+        const deptDoc = await req.db.collection('departamentos').findOne(
+          { name: { $regex: new RegExp(`^${escapeRegExp(userDeptName)}$`, 'i') } },
+          { projection: { _id: 1, name: 1 } }
+        );
+        if (deptDoc && deptDoc._id) {
+          deptMatchValues.push(deptDoc._id.toString());
+          deptMatchValues.push(deptDoc._id);
+        }
+      } catch (e) {
+        console.error('notificaciones: error resolviendo departamento:', e && e.message);
+      }
+    }
+
     // Obtener workflows que contengan tareas/nodos asignados al usuario
     const wfCol = req.db.collection('flujos');
 
@@ -108,6 +131,14 @@ router.get('/user/:userId', async (req, res) => {
       { 'nodes.assignedTo': usuario.mail },
       { 'nodes.userId': usuario.mail }
     ];
+
+    // Incluir nodos del departamento del usuario para notificaciones agregadas
+    if (deptMatchValues.length > 0) {
+      matchConditions.push(
+        { 'nodes.department': { $in: deptMatchValues } },
+        { 'nodes.dept': { $in: deptMatchValues } }
+      );
+    }
 
     // Además soportar string IDs
     if (usuario.id) {
@@ -127,6 +158,8 @@ router.get('/user/:userId', async (req, res) => {
 
     const overdueSet = ['overdue', 'atrasado', 'vencido', 'vencida', 'delayed'];
     const completedSet = ['done', 'completed', 'finalizado', 'completado', 'terminado'];
+    let deptOverdueCount = 0;
+    let deptUpcomingCount = 0;
 
     workflows.forEach(wf => {
       (wf.nodes || []).forEach(node => {
@@ -139,7 +172,6 @@ router.get('/user/:userId', async (req, res) => {
           if (typeof o === 'object' && o.toString) return o.toString() === usuario._id.toString();
           return String(o) === String(usuario._id) || String(o) === String(usuario.mail) || String(o) === String(usuario.id);
         });
-        if (!isForUser) return;
 
         // Detectar due date
         const possibleDue = node.dueDate || node.due || node.deadline || node.due_at || node.fecha_limite || node.fechaVencimiento;
@@ -148,6 +180,16 @@ router.get('/user/:userId', async (req, res) => {
         // Detectar completed
         const status = (node.status || '').toString().toLowerCase();
         const isCompleted = completedSet.includes(status) || node.completedAt || node.finishedAt || node.done;
+
+        // Detectar tareas de departamento para conteos agregados
+        const nodeDept = node.department || node.dept;
+        const isDeptTask = deptMatchValues.length > 0 && nodeDept != null && deptMatchValues.some(v => String(v) === String(nodeDept));
+        if (isDeptTask && !isCompleted) {
+          if (due && due < now) deptOverdueCount += 1;
+          else if (due && due >= now && due <= upcomingLimit) deptUpcomingCount += 1;
+        }
+
+        if (!isForUser) return;
 
         // Overdue: due < now && not completed
         if (due && due < now && !isCompleted) {
@@ -200,8 +242,36 @@ router.get('/user/:userId', async (req, res) => {
       });
     });
 
+    // Notificaciones agregadas por departamento (overdue / upcoming)
+    if (userDeptName && (deptOverdueCount > 0 || deptUpcomingCount > 0)) {
+      if (deptOverdueCount > 0) {
+        dynamicNotis.push({
+          id: `gen-dept-overdue-${userDeptName}`,
+          titulo: 'Tareas vencidas en tu departamento',
+          descripcion: `Tu departamento ('${userDeptName}') tiene ${deptOverdueCount} tareas vencidas.`,
+          prioridad: 3,
+          fecha_creacion: now,
+          tipo: 'dept-overdue',
+          departamento: userDeptName,
+          pendientes: deptOverdueCount
+        });
+      }
+      if (deptUpcomingCount > 0) {
+        dynamicNotis.push({
+          id: `gen-dept-upcoming-${userDeptName}`,
+          titulo: 'Próximas fechas límite en tu departamento',
+          descripcion: `Tu departamento ('${userDeptName}') tiene ${deptUpcomingCount} tareas próximas a vencer.`,
+          prioridad: 2,
+          fecha_creacion: now,
+          tipo: 'dept-upcoming',
+          departamento: userDeptName,
+          pendientes: deptUpcomingCount
+        });
+      }
+    }
+
     // Detectar cuellos de botella por departamento: contar nodos pendientes en el departamento del usuario
-    const userDept = usuario.departamento || usuario.empresa || null;
+    const userDept = userDeptName;
     if (userDept) {
       // pipeline similar al de analytics: contar nodos pendientes por department
       const deptPipeline = [
