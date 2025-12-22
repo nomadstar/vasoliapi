@@ -20,15 +20,29 @@ router.use(ensureDb);
 router.post('/', async (req, res) => {
     try {
         const data = req.body;
-        
-        // Verifica si ya se envió un ID; si es así, se recomienda PUT.
-        if (data._id || data.id) { 
-             return res.status(400).json({ message: "Use PUT a /api/workflows/:id para actualizar un flujo existente. POST es solo para creación." });
+        const { name, nodes, connections, isPublished } = data;
+
+        // Si envían un id o _id -> hacer upsert (crear si no existe, actualizar si existe)
+        const providedId = data._id || data.id;
+        if (providedId) {
+            const filter = ObjectId.isValid(providedId) ? { _id: new ObjectId(providedId) } : { _id: providedId };
+
+            // Evitar que el cuerpo reemplace el _id
+            const toSet = { name, nodes, connections, isPublished: isPublished || false, updatedAt: new Date() };
+
+            const result = await req.db.collection(WORKFLOW_COLLECTION).updateOne(
+                filter,
+                { $set: toSet, $setOnInsert: { createdAt: new Date() } },
+                { upsert: true }
+            );
+
+            // Obtener documento final
+            const finalDoc = await req.db.collection(WORKFLOW_COLLECTION).findOne(filter);
+            const statusCode = result.upsertedCount ? 201 : 200;
+            return res.status(statusCode).json({ success: true, upserted: !!result.upsertedId, workflow: finalDoc });
         }
 
-        const { name, nodes, connections, isPublished } = data;
-        
-        // Lógica DB: Inserta nuevo documento
+        // Si no envían id -> comportamiento clásico de creación
         const result = await req.db.collection(WORKFLOW_COLLECTION).insertOne({
             name,
             nodes,
@@ -38,10 +52,8 @@ router.post('/', async (req, res) => {
             updatedAt: new Date(),
         });
 
-        // Retorna el objeto creado con el ID de MongoDB (lo que el frontend espera)
         const newWorkflow = await req.db.collection(WORKFLOW_COLLECTION).findOne({ _id: result.insertedId });
-        
-        res.status(201).json(newWorkflow);
+        return res.status(201).json(newWorkflow);
 
     } catch (error) {
         console.error("Error al crear el flujo:", error);
