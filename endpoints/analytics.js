@@ -238,63 +238,59 @@ router.get('/templates/usage', async (req, res) => {
   }
 });
 
-// GET /tasks/status-summary - resumen de estados: completadas, atrasadas, postergadas, pendientes
+// GET /tasks/status-summary - resumen de estados de FLUJOS (workflows)
 router.get('/tasks/status-summary', async (req, res) => {
   try {
     const db = req.db;
-    const now = new Date();
 
-    // Sets de palabras para detectar estados en distintos idiomas
+    // Sets de palabras para detectar estados (lowercase)
     const completedSet = ['done', 'completed', 'finalizado', 'completado', 'terminado'];
+    const inProgressSet = ['iniciado', 'tramitando', 'proceso firma', 'en proceso', 'in progress', 'processing'];
     const postponedSet = ['postponed', 'postergada', 'postergado', 'reprogramada', 'pospuesta', 'pospuesto'];
-    const overdueSet = ['overdue', 'atrasado', 'vencido', 'vencida'];
+    const overdueSet = ['overdue', 'atrasado', 'vencido', 'vencida', 'delayed'];
 
-    // Pipeline: unwind nodes, project relevant fields (status, assignee, due candidates)
+    // Pipeline: contar flujos por su campo status directo
     const pipeline = [
-      { $project: { nodes: { $ifNull: ['$nodes', []] } } },
-      { $unwind: { path: '$nodes', preserveNullAndEmptyArrays: false } },
       {
         $project: {
-          status: { $toLower: { $ifNull: ['$nodes.status', ''] } },
-          assignee: '$nodes.assignee',
-          createdAt: { $ifNull: ['$nodes.createdAt', '$nodes.created'] },
-          completedAt: { $ifNull: ['$nodes.completedAt', '$nodes.finishedAt'] },
-          dueDateRaw: { $ifNull: ['$nodes.dueDate', { $ifNull: ['$nodes.due', null] }] },
-          postponedFlag: { $ifNull: ['$nodes.postponed', false] }
+          status: { $toLower: { $ifNull: ['$status', ''] } }
         }
       },
-      // Normalize dueDateRaw to actual date when possible
       {
         $addFields: {
-          dueDate: { $cond: [{ $and: [{ $ne: ['$dueDateRaw', null] }, { $ne: ['$dueDateRaw', ''] }] }, { $cond: [{ $eq: [{ $type: '$dueDateRaw' }, 'string'] }, { $dateFromString: { dateString: '$dueDateRaw' } }, '$dueDateRaw'] }, null] }
+          isCompleted: { $cond: [{ $in: ['$status', completedSet] }, 1, 0] },
+          isInProgress: { $cond: [{ $in: ['$status', inProgressSet] }, 1, 0] },
+          isPostponed: { $cond: [{ $in: ['$status', postponedSet] }, 1, 0] },
+          isOverdue: { $cond: [{ $in: ['$status', overdueSet] }, 1, 0] }
         }
       },
-      // Flags
       {
-        $addFields: {
-          isCompleted: { $cond: [{ $or: [{ $in: ['$status', completedSet] }, { $and: [{ $ne: ['$completedAt', null] }, { $ne: ['$completedAt', ''] }, { $eq: [{ $type: '$completedAt' }, 'date'] }] }] }, 1, 0] },
-          isPostponed: { $cond: [{ $or: [{ $in: ['$status', postponedSet] }, { $eq: ['$postponedFlag', true] }] }, 1, 0] },
-          isOverdueByField: { $cond: [{ $and: [{ $ne: ['$dueDate', null] }, { $lt: ['$dueDate', now] }] }, 1, 0] },
-          isOverdueByStatus: { $cond: [{ $in: ['$status', overdueSet] }, 1, 0] }
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          completed: { $sum: '$isCompleted' },
+          inProgress: { $sum: '$isInProgress' },
+          postponed: { $sum: '$isPostponed' },
+          overdue: { $sum: '$isOverdue' }
         }
-      },
-      // Final classification: overdue if overdueByField or overdueByStatus and not completed/postponed
-      {
-        $addFields: {
-          isOverdue: { $cond: [{ $and: [{ $or: ['$isOverdueByField', '$isOverdueByStatus'] }, { $eq: ['$isCompleted', 0] }, { $eq: ['$isPostponed', 0] }] }, 1, 0] }
-        }
-      },
-      // Group totals
-      { $group: { _id: null, total: { $sum: 1 }, completed: { $sum: '$isCompleted' }, postponed: { $sum: '$isPostponed' }, overdue: { $sum: '$isOverdue' } } }
+      }
     ];
 
     const stats = await db.collection('flujos').aggregate(pipeline).toArray();
-    const result = stats[0] || { total: 0, completed: 0, postponed: 0, overdue: 0 };
+    const result = stats[0] || { total: 0, completed: 0, inProgress: 0, postponed: 0, overdue: 0 };
 
-    // pending = total - completed - postponed
-    const pending = Math.max(0, result.total - result.completed - result.postponed);
+    // pending = flujos sin status o con status no reconocido
+    const pending = Math.max(0, result.total - result.completed - result.inProgress - result.postponed - result.overdue);
 
-    return res.json({ ok: true, totalTasks: result.total, completed: result.completed, postponed: result.postponed, overdue: result.overdue, pending });
+    return res.json({
+      ok: true,
+      totalFlows: result.total,
+      completed: result.completed,
+      inProgress: result.inProgress,
+      postponed: result.postponed,
+      overdue: result.overdue,
+      pending
+    });
   } catch (err) {
     console.error('Analytics /tasks/status-summary error:', err);
     return res.status(500).json({ error: 'Error generando tasks status summary' });
