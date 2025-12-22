@@ -45,13 +45,35 @@ router.post("/", async (req, res) => {
 router.get('/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    if (!ObjectId.isValid(userId)) return res.status(400).json({ error: 'userId inválido' });
+    // Intentos de búsqueda flexibles: ObjectId, string _id, id, mail o nombre
+    const collection = req.db.collection('usuarios');
 
-    const usuario = await req.db
-      .collection('usuarios')
-      .findOne({ _id: new ObjectId(userId) }, { projection: { notificaciones: 1 } });
+    let usuario = null;
 
-    if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
+    // 1) Si parece ObjectId válido, prueba por _id
+    if (ObjectId.isValid(userId)) {
+      usuario = await collection.findOne({ _id: new ObjectId(userId) }, { projection: { notificaciones: 1 } });
+    }
+
+    // 2) Si no encontrado, intenta por _id como string (algunos registros tienen _id como string)
+    if (!usuario) {
+      usuario = await collection.findOne({ _id: userId }, { projection: { notificaciones: 1 } });
+    }
+
+    // 3) Si aún no encontrado, intenta por campo `id`
+    if (!usuario) {
+      usuario = await collection.findOne({ id: userId }, { projection: { notificaciones: 1 } });
+    }
+
+    // 4) Finalmente intenta buscar por mail o nombre
+    if (!usuario) {
+      usuario = await collection.findOne({ $or: [{ mail: userId }, { nombre: userId }] }, { projection: { notificaciones: 1 } });
+    }
+
+    if (!usuario) {
+      console.warn('notificaciones: usuario no encontrado con userId=', userId);
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
 
     res.json(usuario.notificaciones || []);
   } catch (err) {
