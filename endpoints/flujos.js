@@ -61,8 +61,15 @@ router.put('/:id', async (req, res) => {
             return res.status(400).json({ error: "ID de flujo no válido." });
         }
         
+        // Evitar que valores numéricos (ej: counts) reemplacen los arrays reales
+        if (updates.hasOwnProperty('nodes') && typeof updates.nodes !== 'object') {
+            delete updates.nodes;
+        }
+        if (updates.hasOwnProperty('connections') && typeof updates.connections !== 'object') {
+            delete updates.connections;
+        }
+
         // El frontend envía el ID en la URL y los datos actualizados en el cuerpo.
-        // Quitamos el ID del cuerpo para evitar sobrescribir accidentalmente en el $set
         delete updates.id; 
         delete updates._id;
 
@@ -75,17 +82,51 @@ router.put('/:id', async (req, res) => {
             { returnDocument: "after" } 
         );
         
-        if (!result) {
+        if (!result || !result.value) {
             return res.status(404).json({ message: "Flujo de trabajo no encontrado para actualizar." });
         }
 
-        res.status(200).json(result.value); // Retorna el flujo actualizado
+        res.status(200).json(result.value);
     } catch (error) {
         console.error("Error al actualizar el flujo:", error);
         res.status(500).json({ message: "Error al actualizar el flujo", error: error.message });
     }
 });
 
+// --- NUEVO: PATCH para actualizar campos de un nodo embebido por nodeId ---
+// URL: PATCH /api/workflows/:id/nodes
+// Body: { nodeId: "...", fields: { status: "...", title: "...", ... } }
+router.patch('/:id/nodes', async (req, res) => {
+    try {
+        const workflowId = req.params.id;
+        const { nodeId, fields } = req.body;
+
+        if (!ObjectId.isValid(workflowId)) return res.status(400).json({ error: "ID de flujo no válido." });
+        if (!nodeId || !fields || typeof fields !== 'object') return res.status(400).json({ error: "nodeId y fields son requeridos." });
+
+        // Construir $set dinámico para arrayFilters
+        const setObj = {};
+        for (const [k, v] of Object.entries(fields)) {
+            setObj[`nodes.$[node].${k}`] = v;
+        }
+        setObj['updatedAt'] = new Date();
+
+        const result = await req.db.collection(WORKFLOW_COLLECTION).findOneAndUpdate(
+            { _id: new ObjectId(workflowId) },
+            { $set: setObj },
+            {
+                arrayFilters: [{ "node.id": nodeId }],
+                returnDocument: "after"
+            }
+        );
+
+        if (!result || !result.value) return res.status(404).json({ error: "Workflow o nodo no encontrado." });
+        return res.json({ ok: true, workflow: result.value });
+    } catch (err) {
+        console.error("Error patch node:", err);
+        res.status(500).json({ error: "Error interno al actualizar nodo" });
+    }
+});
 
 // 3. ENDPOINT GET: Obtener un flujo por ID
 // URL: GET /api/workflows/:id

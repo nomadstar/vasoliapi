@@ -11,7 +11,17 @@ function requireDb(req, res, next) {
 function requireAccessKey(req, res, next) {
   const provided = req.headers['x-access-key'] || req.query.accessKey || (req.body && req.body.accessKey);
   const expected = process.env.ACCESS_KEY || process.env.MAIL_KEY || process.env.MAIL_KEY_OLD || process.env.MAIL_KEY_DEFAULT || null;
-  if (!expected) return res.status(403).json({ error: 'Access key no configurada en el servidor.' });
+  const allowNoKey = (String(process.env.ALLOW_ANALYTICS_NO_KEY || '').toLowerCase() === 'true') || (process.env.NODE_ENV && process.env.NODE_ENV !== 'production');
+
+  // Si no hay clave esperada y no permitimos omitirla, bloquear.
+  if (!expected && !allowNoKey) return res.status(403).json({ error: 'Access key no configurada en el servidor.' });
+
+  // En entornos de desarrollo o si se habilita explícitamente, permitir acceso cuando no hay clave.
+  if (!expected && allowNoKey) {
+    console.warn('Warning: analytics access key no configurada — acceso permitido en modo dev/ALLOW_ANALYTICS_NO_KEY.');
+    return next();
+  }
+
   if (!provided || String(provided) !== String(expected)) return res.status(401).json({ error: 'Clave de acceso inválida.' });
   next();
 }
