@@ -343,9 +343,111 @@ router.get('/quick/:userId', async (req, res) => {
 
     if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado (quick)' });
 
-    // Devolver solo las notificaciones guardadas; esto evita agregaciones pesadas
+    function parseDate(d) {
+      if (!d) return null;
+      if (d instanceof Date) return d;
+      try {
+        const dt = new Date(d);
+        if (isNaN(dt.getTime())) return null;
+        return dt;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function escapeRegExp(str) {
+      return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    const now = new Date();
+    const upcomingDays = parseInt(req.query.upcomingDays || '3', 10);
+    const upcomingLimit = new Date(now.getTime() + (upcomingDays * 24 * 60 * 60 * 1000));
+
+    // Devolver notificaciones guardadas + agregados rápidos por departamento
     const existing = usuario.notificaciones || [];
-    return res.json({ quick: true, count: existing.length, notificaciones: existing });
+    const dynamic = [];
+
+    const userDeptName = usuario.departamento || usuario.empresa || null;
+    let deptMatchValues = [];
+    if (userDeptName) {
+      deptMatchValues.push(userDeptName);
+      try {
+        const deptDoc = await req.db.collection('departamentos').findOne(
+          { name: { $regex: new RegExp(`^${escapeRegExp(userDeptName)}$`, 'i') } },
+          { projection: { _id: 1 } }
+        );
+        if (deptDoc && deptDoc._id) {
+          deptMatchValues.push(deptDoc._id.toString());
+          deptMatchValues.push(deptDoc._id);
+        }
+      } catch (e) {
+        console.error('notificaciones.quick: error resolviendo departamento:', e && e.message);
+      }
+    }
+
+    if (deptMatchValues.length > 0) {
+      let deptOverdueCount = 0;
+      let deptUpcomingCount = 0;
+      try {
+        const workflows = await wfCol.find({
+          $or: [
+            { 'nodes.department': { $in: deptMatchValues } },
+            { 'nodes.dept': { $in: deptMatchValues } }
+          ]
+        })
+          .project({ nodes: 1 })
+          .maxTimeMS(2000)
+          .limit(100)
+          .toArray();
+
+        const completedSet = ['done', 'completed', 'finalizado', 'completado', 'terminado'];
+
+        workflows.forEach(wf => {
+          (wf.nodes || []).forEach(node => {
+            if (!node) return;
+            const nodeDept = node.department || node.dept;
+            if (!deptMatchValues.some(v => String(v) === String(nodeDept))) return;
+            const status = (node.status || '').toString().toLowerCase();
+            const isCompleted = completedSet.includes(status) || node.completedAt || node.finishedAt || node.done;
+            if (isCompleted) return;
+            const due = parseDate(node.dueDate || node.due || node.deadline || node.due_at || node.fecha_limite || node.fechaVencimiento);
+            if (!due) return;
+            if (due < now) deptOverdueCount += 1;
+            else if (due >= now && due <= upcomingLimit) deptUpcomingCount += 1;
+          });
+        });
+      } catch (e) {
+        console.error('notificaciones.quick: error consultando workflows:', e && e.message);
+      }
+
+      if (deptOverdueCount > 0) {
+        dynamic.push({
+          id: `gen-dept-overdue-${userDeptName}`,
+          titulo: 'Tareas vencidas en tu departamento',
+          descripcion: `Tu departamento ('${userDeptName}') tiene ${deptOverdueCount} tareas vencidas.`,
+          prioridad: 3,
+          fecha_creacion: now,
+          tipo: 'dept-overdue',
+          departamento: userDeptName,
+          pendientes: deptOverdueCount
+        });
+      }
+      if (deptUpcomingCount > 0) {
+        dynamic.push({
+          id: `gen-dept-upcoming-${userDeptName}`,
+          titulo: 'Próximas fechas límite en tu departamento',
+          descripcion: `Tu departamento ('${userDeptName}') tiene ${deptUpcomingCount} tareas próximas a vencer.`,
+          prioridad: 2,
+          fecha_creacion: now,
+          tipo: 'dept-upcoming',
+          departamento: userDeptName,
+          pendientes: deptUpcomingCount
+        });
+      }
+    }
+
+    const merged = [...existing, ...dynamic];
+    return res.json({ quick: true, count: merged.length, notificaciones: merged });
   } catch (err) {
     console.error('notificaciones.quick error:', err && err.message);
     return res.status(500).json({ error: 'Error en quick lookup', detalles: err && err.message });
