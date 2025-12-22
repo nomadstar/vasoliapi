@@ -38,7 +38,7 @@ async function countCollection(db, name) {
 router.get('/summary', async (req, res) => {
   try {
     const db = req.db;
-    const collections = ['usuarios','flujos','docxs','plantillas','departamentos','historial','tokens','empresas','forms'];
+    const collections = ['usuarios', 'flujos', 'docxs', 'plantillas', 'departamentos', 'historial', 'tokens', 'empresas', 'forms'];
     const counts = {};
     await Promise.all(collections.map(async (c) => { counts[c] = await countCollection(db, c); }));
     return res.json({ ok: true, counts });
@@ -194,7 +194,7 @@ router.get('/monthly/trends', async (req, res) => {
   try {
     const db = req.db;
     const months = Math.max(1, Math.min(36, parseInt(req.query.months || '6', 10)));
-    const start = new Date(); start.setMonth(start.getMonth() - (months - 1)); start.setDate(1); start.setHours(0,0,0,0);
+    const start = new Date(); start.setMonth(start.getMonth() - (months - 1)); start.setDate(1); start.setHours(0, 0, 0, 0);
 
     const docsAgg = [
       { $match: { createdAt: { $exists: true } } },
@@ -245,39 +245,43 @@ router.get('/tasks/status-summary', async (req, res) => {
     const now = new Date();
 
     // Sets de palabras para detectar estados en distintos idiomas
-    const completedSet = ['done','completed','finalizado','completado','terminado'];
-    const postponedSet = ['postponed','postergada','postergado','reprogramada','pospuesta','pospuesto'];
-    const overdueSet = ['overdue','atrasado','vencido','vencida'];
+    const completedSet = ['done', 'completed', 'finalizado', 'completado', 'terminado'];
+    const postponedSet = ['postponed', 'postergada', 'postergado', 'reprogramada', 'pospuesta', 'pospuesto'];
+    const overdueSet = ['overdue', 'atrasado', 'vencido', 'vencida'];
 
     // Pipeline: unwind nodes, project relevant fields (status, assignee, due candidates)
     const pipeline = [
       { $project: { nodes: { $ifNull: ['$nodes', []] } } },
       { $unwind: { path: '$nodes', preserveNullAndEmptyArrays: false } },
-      { $project: {
+      {
+        $project: {
           status: { $toLower: { $ifNull: ['$nodes.status', ''] } },
           assignee: '$nodes.assignee',
           createdAt: { $ifNull: ['$nodes.createdAt', '$nodes.created'] },
           completedAt: { $ifNull: ['$nodes.completedAt', '$nodes.finishedAt'] },
-          dueDateRaw: { $ifNull: ['$nodes.dueDate', { $ifNull: ['$nodes.due', null] } ] },
+          dueDateRaw: { $ifNull: ['$nodes.dueDate', { $ifNull: ['$nodes.due', null] }] },
           postponedFlag: { $ifNull: ['$nodes.postponed', false] }
         }
       },
       // Normalize dueDateRaw to actual date when possible
-      { $addFields: {
-          dueDate: { $cond: [ { $and: [ { $ne: ['$dueDateRaw', null] }, { $ne: ['$dueDateRaw', ''] } ] }, { $cond: [ { $eq: [{ $type: '$dueDateRaw' }, 'string'] }, { $dateFromString: { dateString: '$dueDateRaw' } }, '$dueDateRaw' ] }, null ] }
+      {
+        $addFields: {
+          dueDate: { $cond: [{ $and: [{ $ne: ['$dueDateRaw', null] }, { $ne: ['$dueDateRaw', ''] }] }, { $cond: [{ $eq: [{ $type: '$dueDateRaw' }, 'string'] }, { $dateFromString: { dateString: '$dueDateRaw' } }, '$dueDateRaw'] }, null] }
         }
       },
       // Flags
-      { $addFields: {
-          isCompleted: { $cond: [ { $or: [ { $in: ['$status', completedSet] }, { $ne: ['$completedAt', null] } ] }, 1, 0 ] },
-          isPostponed: { $cond: [ { $or: [ { $in: ['$status', postponedSet] }, { $eq: ['$postponedFlag', true] } ] }, 1, 0 ] },
-          isOverdueByField: { $cond: [ { $and: [ { $ne: ['$dueDate', null] }, { $lt: ['$dueDate', now] } ] }, 1, 0 ] },
-          isOverdueByStatus: { $cond: [ { $in: ['$status', overdueSet] }, 1, 0 ] }
+      {
+        $addFields: {
+          isCompleted: { $cond: [{ $or: [{ $in: ['$status', completedSet] }, { $and: [{ $ne: ['$completedAt', null] }, { $ne: ['$completedAt', ''] }, { $eq: [{ $type: '$completedAt' }, 'date'] }] }] }, 1, 0] },
+          isPostponed: { $cond: [{ $or: [{ $in: ['$status', postponedSet] }, { $eq: ['$postponedFlag', true] }] }, 1, 0] },
+          isOverdueByField: { $cond: [{ $and: [{ $ne: ['$dueDate', null] }, { $lt: ['$dueDate', now] }] }, 1, 0] },
+          isOverdueByStatus: { $cond: [{ $in: ['$status', overdueSet] }, 1, 0] }
         }
       },
       // Final classification: overdue if overdueByField or overdueByStatus and not completed/postponed
-      { $addFields: {
-          isOverdue: { $cond: [ { $and: [ { $or: ['$isOverdueByField', '$isOverdueByStatus'] }, { $eq: ['$isCompleted', 0] }, { $eq: ['$isPostponed', 0] } ] }, 1, 0 ] }
+      {
+        $addFields: {
+          isOverdue: { $cond: [{ $and: [{ $or: ['$isOverdueByField', '$isOverdueByStatus'] }, { $eq: ['$isCompleted', 0] }, { $eq: ['$isPostponed', 0] }] }, 1, 0] }
         }
       },
       // Group totals
@@ -303,14 +307,15 @@ router.get('/tasks/status-summary/by-department', async (req, res) => {
     const db = req.db;
     const now = new Date();
 
-    const completedSet = ['done','completed','finalizado','completado','terminado'];
-    const postponedSet = ['postponed','postergada','postergado','reprogramada','pospuesta','pospuesto'];
-    const overdueSet = ['overdue','atrasado','vencido','vencida'];
+    const completedSet = ['done', 'completed', 'finalizado', 'completado', 'terminado'];
+    const postponedSet = ['postponed', 'postergada', 'postergado', 'reprogramada', 'pospuesta', 'pospuesto'];
+    const overdueSet = ['overdue', 'atrasado', 'vencido', 'vencida'];
 
     const pipeline = [
       { $project: { nodes: { $ifNull: ['$nodes', []] } } },
       { $unwind: { path: '$nodes', preserveNullAndEmptyArrays: false } },
-      { $project: {
+      {
+        $project: {
           status: { $toLower: { $ifNull: ['$nodes.status', ''] } },
           createdAt: { $ifNull: ['$nodes.createdAt', '$nodes.created'] },
           completedAt: { $ifNull: ['$nodes.completedAt', '$nodes.finishedAt'] },
@@ -319,20 +324,23 @@ router.get('/tasks/status-summary/by-department', async (req, res) => {
           department: { $ifNull: ['$nodes.department', { $ifNull: ['$nodes.dept', null] }] }
         }
       },
-      { $addFields: {
-          dueDate: { $cond: [ { $and: [ { $ne: ['$dueDateRaw', null] }, { $ne: ['$dueDateRaw', ''] } ] }, { $cond: [ { $eq: [{ $type: '$dueDateRaw' }, 'string'] }, { $dateFromString: { dateString: '$dueDateRaw' } }, '$dueDateRaw' ] }, null ] }
+      {
+        $addFields: {
+          dueDate: { $cond: [{ $and: [{ $ne: ['$dueDateRaw', null] }, { $ne: ['$dueDateRaw', ''] }] }, { $cond: [{ $eq: [{ $type: '$dueDateRaw' }, 'string'] }, { $dateFromString: { dateString: '$dueDateRaw' } }, '$dueDateRaw'] }, null] }
         }
       },
-      { $addFields: {
-          isCompleted: { $cond: [ { $or: [ { $in: ['$status', completedSet] }, { $ne: ['$completedAt', null] } ] }, 1, 0 ] },
-          isPostponed: { $cond: [ { $or: [ { $in: ['$status', postponedSet] }, { $eq: ['$postponedFlag', true] } ] }, 1, 0 ] },
-          isOverdueByField: { $cond: [ { $and: [ { $ne: ['$dueDate', null] }, { $lt: ['$dueDate', now] } ] }, 1, 0 ] },
-          isOverdueByStatus: { $cond: [ { $in: ['$status', overdueSet] }, 1, 0 ] }
+      {
+        $addFields: {
+          isCompleted: { $cond: [{ $or: [{ $in: ['$status', completedSet] }, { $and: [{ $ne: ['$completedAt', null] }, { $ne: ['$completedAt', ''] }, { $eq: [{ $type: '$completedAt' }, 'date'] }] }] }, 1, 0] },
+          isPostponed: { $cond: [{ $or: [{ $in: ['$status', postponedSet] }, { $eq: ['$postponedFlag', true] }] }, 1, 0] },
+          isOverdueByField: { $cond: [{ $and: [{ $ne: ['$dueDate', null] }, { $lt: ['$dueDate', now] }] }, 1, 0] },
+          isOverdueByStatus: { $cond: [{ $in: ['$status', overdueSet] }, 1, 0] }
         }
       },
-      { $addFields: {
-          isOverdue: { $cond: [ { $and: [ { $or: ['$isOverdueByField', '$isOverdueByStatus'] }, { $eq: ['$isCompleted', 0] }, { $eq: ['$isPostponed', 0] } ] }, 1, 0 ] },
-          deptKey: { $cond: [ { $or: [ { $eq: ['$department', null] }, { $eq: ['$department', ''] } ] }, 'unknown', '$department' ] }
+      {
+        $addFields: {
+          isOverdue: { $cond: [{ $and: [{ $or: ['$isOverdueByField', '$isOverdueByStatus'] }, { $eq: ['$isCompleted', 0] }, { $eq: ['$isPostponed', 0] }] }, 1, 0] },
+          deptKey: { $cond: [{ $or: [{ $eq: ['$department', null] }, { $eq: ['$department', ''] }] }, 'unknown', '$department'] }
         }
       },
       { $group: { _id: '$deptKey', total: { $sum: 1 }, completed: { $sum: '$isCompleted' }, postponed: { $sum: '$isPostponed' }, overdue: { $sum: '$isOverdue' } } },
@@ -355,14 +363,15 @@ router.get('/export/tasks/status-summary', async (req, res) => {
 
     // Run pipeline directly to get breakdown data
     const now = new Date();
-    const completedSet = ['done','completed','finalizado','completado','terminado'];
-    const postponedSet = ['postponed','postergada','postergado','reprogramada','pospuesta','pospuesto'];
-    const overdueSet = ['overdue','atrasado','vencido','vencida'];
+    const completedSet = ['done', 'completed', 'finalizado', 'completado', 'terminado'];
+    const postponedSet = ['postponed', 'postergada', 'postergado', 'reprogramada', 'pospuesta', 'pospuesto'];
+    const overdueSet = ['overdue', 'atrasado', 'vencido', 'vencida'];
 
     const pipeline = [
       { $project: { nodes: { $ifNull: ['$nodes', []] } } },
       { $unwind: { path: '$nodes', preserveNullAndEmptyArrays: false } },
-      { $project: {
+      {
+        $project: {
           status: { $toLower: { $ifNull: ['$nodes.status', ''] } },
           completedAt: { $ifNull: ['$nodes.completedAt', '$nodes.finishedAt'] },
           dueDateRaw: { $ifNull: ['$nodes.dueDate', { $ifNull: ['$nodes.due', null] }] },
@@ -370,20 +379,23 @@ router.get('/export/tasks/status-summary', async (req, res) => {
           department: { $ifNull: ['$nodes.department', { $ifNull: ['$nodes.dept', null] }] }
         }
       },
-      { $addFields: {
-          dueDate: { $cond: [ { $and: [ { $ne: ['$dueDateRaw', null] }, { $ne: ['$dueDateRaw', ''] } ] }, { $cond: [ { $eq: [{ $type: '$dueDateRaw' }, 'string'] }, { $dateFromString: { dateString: '$dueDateRaw' } }, '$dueDateRaw' ] }, null ] }
+      {
+        $addFields: {
+          dueDate: { $cond: [{ $and: [{ $ne: ['$dueDateRaw', null] }, { $ne: ['$dueDateRaw', ''] }] }, { $cond: [{ $eq: [{ $type: '$dueDateRaw' }, 'string'] }, { $dateFromString: { dateString: '$dueDateRaw' } }, '$dueDateRaw'] }, null] }
         }
       },
-      { $addFields: {
-          isCompleted: { $cond: [ { $or: [ { $in: ['$status', completedSet] }, { $ne: ['$completedAt', null] } ] }, 1, 0 ] },
-          isPostponed: { $cond: [ { $or: [ { $in: ['$status', postponedSet] }, { $eq: ['$postponedFlag', true] } ] }, 1, 0 ] },
-          isOverdueByField: { $cond: [ { $and: [ { $ne: ['$dueDate', null] }, { $lt: ['$dueDate', now] } ] }, 1, 0 ] },
-          isOverdueByStatus: { $cond: [ { $in: ['$status', overdueSet] }, 1, 0 ] }
+      {
+        $addFields: {
+          isCompleted: { $cond: [{ $or: [{ $in: ['$status', completedSet] }, { $and: [{ $ne: ['$completedAt', null] }, { $ne: ['$completedAt', ''] }, { $eq: [{ $type: '$completedAt' }, 'date'] }] }] }, 1, 0] },
+          isPostponed: { $cond: [{ $or: [{ $in: ['$status', postponedSet] }, { $eq: ['$postponedFlag', true] }] }, 1, 0] },
+          isOverdueByField: { $cond: [{ $and: [{ $ne: ['$dueDate', null] }, { $lt: ['$dueDate', now] }] }, 1, 0] },
+          isOverdueByStatus: { $cond: [{ $in: ['$status', overdueSet] }, 1, 0] }
         }
       },
-      { $addFields: {
-          isOverdue: { $cond: [ { $and: [ { $or: ['$isOverdueByField', '$isOverdueByStatus'] }, { $eq: ['$isCompleted', 0] }, { $eq: ['$isPostponed', 0] } ] }, 1, 0 ] },
-          deptKey: { $cond: [ { $or: [ { $eq: ['$department', null] }, { $eq: ['$department', ''] } ] }, 'unknown', '$department' ] }
+      {
+        $addFields: {
+          isOverdue: { $cond: [{ $and: [{ $or: ['$isOverdueByField', '$isOverdueByStatus'] }, { $eq: ['$isCompleted', 0] }, { $eq: ['$isPostponed', 0] }] }, 1, 0] },
+          deptKey: { $cond: [{ $or: [{ $eq: ['$department', null] }, { $eq: ['$department', ''] }] }, 'unknown', '$department'] }
         }
       },
       { $group: { _id: '$deptKey', total: { $sum: 1 }, completed: { $sum: '$isCompleted' }, postponed: { $sum: '$isPostponed' }, overdue: { $sum: '$isOverdue' } } },
@@ -404,12 +416,12 @@ router.get('/export/tasks/status-summary', async (req, res) => {
     }, { total: 0, completed: 0, postponed: 0, overdue: 0, pending: 0 });
 
     if (format === 'csv') {
-      const header = ['group','total','completed','postponed','overdue','pending'];
+      const header = ['group', 'total', 'completed', 'postponed', 'overdue', 'pending'];
       const lines = [];
       lines.push(header.join(','));
-      lines.push([ 'TOTAL', overall.total, overall.completed, overall.postponed, overall.overdue, overall.pending ].join(','));
+      lines.push(['TOTAL', overall.total, overall.completed, overall.postponed, overall.overdue, overall.pending].join(','));
       breakdown.forEach(r => {
-        lines.push([String(r.department).replace(/,/g,' '), r.total, r.completed, r.postponed, r.overdue, r.pending].join(','));
+        lines.push([String(r.department).replace(/,/g, ' '), r.total, r.completed, r.postponed, r.overdue, r.pending].join(','));
       });
       const csv = lines.join('\n');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
