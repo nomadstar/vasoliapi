@@ -195,6 +195,64 @@ router.get('/:id', async (req, res) => {
     }
 });
 
+// 5) Obtener tareas asignadas a un usuario (por id o email)
+// URL: GET /api/workflows/tasks-by-user/:user
+router.get('/tasks-by-user/:user', async (req, res) => {
+    try {
+        const { user } = req.params;
+        if (!user) return res.status(400).json({ error: "Usuario requerido (id o email)" });
+
+        const collection = req.db.collection(WORKFLOW_COLLECTION);
+
+        const orConditions = [
+            { "nodes.owner": user },
+            { "nodes.assignedTo": user },
+            { "nodes.userId": user },
+            { "nodes.responsible": user },
+            { "nodes.email": user }
+        ];
+
+        if (ObjectId.isValid(user)) {
+            const obj = new ObjectId(user);
+            orConditions.push(
+                { "nodes.owner": obj },
+                { "nodes.assignedTo": obj },
+                { "nodes.userId": obj }
+            );
+        }
+
+        const workflows = await collection.find({ $or: orConditions }).toArray();
+
+        const tareas = [];
+        workflows.forEach(wf => {
+            const matched = (wf.nodes || []).filter(n =>
+                n && (
+                    n.owner === user ||
+                    n.assignedTo === user ||
+                    n.userId === user ||
+                    n.responsible === user ||
+                    n.email === user ||
+                    (ObjectId.isValid(user) && (
+                        (n.owner && ObjectId.isValid(n.owner) && n.owner.toString() === user) ||
+                        (n.assignedTo && ObjectId.isValid(n.assignedTo) && n.assignedTo.toString() === user) ||
+                        (n.userId && ObjectId.isValid(n.userId) && n.userId.toString() === user)
+                    ))
+                )
+            );
+
+            matched.forEach(n => tareas.push({
+                ...n,
+                workflowId: wf._id,
+                workflowName: wf.name
+            }));
+        });
+
+        res.json({ count: tareas.length, tareas });
+    } catch (err) {
+        console.error("Error en tasks-by-user:", err);
+        res.status(500).json({ error: "Error interno al obtener tareas por usuario" });
+    }
+});
 
 // actualizar el status de una tarea
 router.patch('/:id', async (req, res) => {
@@ -215,74 +273,16 @@ router.patch('/:id', async (req, res) => {
             { "nodes.id": taskId }
         );
 
-        // 5) Obtener tareas asignadas a un usuario (por id o email)
-        // URL: GET /api/workflows/tasks-by-user/:user
-        router.get('/tasks-by-user/:user', async (req, res) => {
-            try {
-                const { user } = req.params;
-                if (!user) return res.status(400).json({ error: "Usuario requerido (id o email)" });
-
-                const collection = req.db.collection(WORKFLOW_COLLECTION);
-
-                // Construir condiciones posibles dentro de nodes para cubrir distintos esquemas
-                const orConditions = [
-                    { "nodes.owner": user },
-                    { "nodes.assignedTo": user },
-                    { "nodes.userId": user },
-                    { "nodes.responsible": user },
-                    { "nodes.email": user }
-                ];
-
-                // Si user parece un ObjectId, también intentamos con ObjectId en campos que lo tengan
-                if (ObjectId.isValid(user)) {
-                    const obj = new ObjectId(user);
-                    orConditions.push(
-                        { "nodes.owner": obj },
-                        { "nodes.assignedTo": obj },
-                        { "nodes.userId": obj }
-                    );
-                }
-
-                const workflows = await collection.find({ $or: orConditions }).toArray();
-
-                // Extraer solo los nodos que correspondan al usuario
-                const tareas = [];
-                workflows.forEach(wf => {
-                    const matched = (wf.nodes || []).filter(n =>
-                        n && (
-                            n.owner === user ||
-                            n.assignedTo === user ||
-                            n.userId === user ||
-                            n.responsible === user ||
-                            n.email === user ||
-                            (ObjectId.isValid(user) && (
-                                (n.owner && ObjectId.isValid(n.owner) && n.owner.toString() === user) ||
-                                (n.assignedTo && ObjectId.isValid(n.assignedTo) && n.assignedTo.toString() === user) ||
-                                (n.userId && ObjectId.isValid(n.userId) && n.userId.toString() === user)
-                            ))
-                        )
-                    );
-
-                    matched.forEach(n => tareas.push({
-                        ...n,
-                        workflowId: wf._id,
-                        workflowName: wf.name
-                    }));
-                });
-
-                res.json({ count: tareas.length, tareas });
-            } catch (err) {
-                console.error("Error en tasks-by-user:", err);
-                res.status(500).json({ error: "Error interno al obtener tareas por usuario" });
-            }
-        });
+        if (!workflow) {
+            return res.status(404).json({ error: 'Workflow o nodo no encontrado.' });
+        }
 
         // Actualizar o crear el campo status dentro del nodo correspondiente
         const updateResult = await req.db.collection(WORKFLOW_COLLECTION).updateOne(
             { _id: workflow._id },
             {
                 $set: {
-                    "nodes.$[task].status": status   // <-- crea o actualiza
+                    "nodes.$[task].status": status
                 }
             },
             {
