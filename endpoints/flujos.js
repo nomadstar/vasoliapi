@@ -181,24 +181,51 @@ router.delete('/:id', async (req, res) => {
 });
 
 
-// 5. ENDPOINT GET: Listar todos los flujos (opcional, para una vista de administración)
-// URL: GET /api/workflows
-router.get("/", async (req, res) => {
-  try {
-    const workflows = await req.db.collection(WORKFLOW_COLLECTION).find().toArray();
-    res.json(workflows);
-  } catch (err) {
-    res.status(500).json({ error: "Error al obtener la lista de flujos" });
-  }
-});
+// 5. ENDPOINT GET: Listar flujos con paginación (cursor-based preferible)
+// URL: GET /api/workflows?pageSize=20&lastId=<objectId>
+router.get('/', async (req, res) => {
+    try {
+        const pageSize = Math.min(100, parseInt(req.query.pageSize, 10) || 20);
+        const lastId = req.query.lastId; // cursor: ObjectId string
 
-router.get("/:mail", async (req, res) => {
-  try {
-    const workflows = await req.db.collection(WORKFLOW_COLLECTION).find().toArray();
-    res.json(workflows);
-  } catch (err) {
-    res.status(500).json({ error: "Error al obtener la lista de flujos" });
-  }
+        const filter = {};
+        // Opcional: permitir filtrar por propietario/status/q si se necesita
+        if (req.query.owner) filter.owner = req.query.owner;
+        if (req.query.status) filter.status = req.query.status;
+
+        const collection = req.db.collection(WORKFLOW_COLLECTION);
+
+        let query = collection.find(filter);
+
+        // Cursor-based cuando nos pasan lastId
+        if (lastId) {
+            if (!ObjectId.isValid(lastId)) return res.status(400).json({ error: 'lastId inválido' });
+            query = collection.find({ ...filter, _id: { $gt: new ObjectId(lastId) } }).sort({ _id: 1 }).limit(pageSize + 1);
+        } else if (req.query.page) {
+            // Fallback a paginación por página (skip) si se solicita
+            const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+            const skip = (page - 1) * pageSize;
+            query = collection.find(filter).sort({ createdAt: -1 }).skip(skip).limit(pageSize + 1);
+        } else {
+            // Sin cursor ni page: devolver primera página ordenada por createdAt desc
+            query = collection.find(filter).sort({ createdAt: -1 }).limit(pageSize + 1);
+        }
+
+        // Proyección: evitar traer campos pesados como `nodes` o `connections` en el listado
+        const projection = { name: 1, owner: 1, isPublished: 1, status: 1, createdAt: 1, updatedAt: 1, summary: 1 };
+        query = query.project(projection);
+
+        const docs = await query.toArray();
+
+        const hasMore = docs.length > pageSize;
+        if (hasMore) docs.pop();
+        const nextCursor = docs.length ? docs[docs.length - 1]._id : null;
+
+        res.json({ items: docs, hasMore, nextCursor });
+    } catch (err) {
+        console.error('Error al listar flujos:', err);
+        res.status(500).json({ error: 'Error al obtener la lista de flujos' });
+    }
 });
 
 
