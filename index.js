@@ -80,6 +80,7 @@ const plantillas = require("./endpoints/plantillas");
 const historial = require("./endpoints/historial");
 const googleDrive = require("./endpoints/googleDrive");
 const analytics = require("./endpoints/analytics");
+const internalProxy = require("./endpoints/internal-proxy");
 
 const app = express();
 
@@ -321,6 +322,8 @@ app.use("/api/tareas", tareas);
 app.use("/api/departments", departments);
 app.use("/api/mail", mailRoutes);
 app.use("/api/noti", noti);
+// Proxy para llamadas a APIs internas desde el backend público
+app.use('/internal-proxy', internalProxy);
 
 //rutas sin uso
 app.use("/api/menu", menu);
