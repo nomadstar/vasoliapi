@@ -13,12 +13,16 @@ router.post("/filter", async (req, res) => {
     // =========================================================
     // --- PASO 1: Validar el Token ---
     // =========================================================
-    const tokenResult = await validarToken(req.db, token);
 
-    if (!tokenResult.ok) {
-        // El token no es válido (no existe, expiró o es antiguo)
+    // Permitir bypass para solicitudes internas
+    if (!req.isInternal) {
+      const tokenResult = await validarToken(req.db, token);
+      if (!tokenResult.ok) {
         console.warn(`Intento de acceso fallido para ${mail}. Razón del token: ${tokenResult.reason}`);
         return res.status(401).json({ error: `Acceso denegado: ${tokenResult.reason}.` });
+      }
+    } else {
+      if (process.env.LOG_LEVEL === 'debug') console.info('/filter - internal request, skipping token validation');
     }
     
     // Si llegamos aquí, el token es válido.

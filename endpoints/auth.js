@@ -105,17 +105,18 @@ router.get("/full/:mail", async (req, res) => {
     const userMail = req.params.mail;
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: "Token de autenticación requerido" });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    const validationResult = await validarToken(req.db, token);
-
-    if (!validationResult.ok) {
-      // Si el token no es válido (expirado, inexistente, etc.)
-      return res.status(401).json({ error: `Acceso no autorizado: ${validationResult.reason}` });
+    // Permitir solicitudes internas sin token
+    if (!req.isInternal) {
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: "Token de autenticación requerido" });
+      }
+      const token = authHeader.split(' ')[1];
+      const validationResult = await validarToken(req.db, token);
+      if (!validationResult.ok) {
+        return res.status(401).json({ error: `Acceso no autorizado: ${validationResult.reason}` });
+      }
+    } else {
+      if (process.env.LOG_LEVEL === 'debug') console.info('/full/:mail - internal request, skipping token validation');
     }
     
     // 2. BUSCAR EL USUARIO POR CORREO
@@ -158,45 +159,28 @@ router.get("/full/:mail", async (req, res) => {
 // VALIDATE - Consulta token desde DB
 router.post("/validate", async (req, res) => {
   const { token, email, cargo } = req.body;
+  // Permitir validación automática para solicitudes internas
+  if (req.isInternal) {
+    if (!email || !cargo) return res.status(401).json({ valid: false, message: "Parámetros missing" });
+    if (process.env.LOG_LEVEL === 'debug') console.info('/validate - internal request, auto-validating');
+    return res.json({ valid: true, user: { email, cargo } });
+  }
 
-  if (!token || !email || !cargo)
-    return res.status(401).json({ valid: false, message: "Acceso inválido" });
-
+  if (!token || !email || !cargo) return res.status(401).json({ valid: false, message: "Acceso inválido" });
   try {
     const tokenRecord = await req.db.collection("tokens").findOne({ token, active: true });
-    if (!tokenRecord)
-      return res.status(401).json({ valid: false, message: "Token inválido o inexistente" });
-
+    if (!tokenRecord) return res.status(401).json({ valid: false, message: "Token inválido o inexistente" });
     const now = new Date();
     const expiresAt = new Date(tokenRecord.expiresAt);
     const createdAt = new Date(tokenRecord.createdAt);
-
-    // 1. Verificar si expiró
     const expired = expiresAt < now;
-
-    // 2. Verificar si es del mismo día calendario
-    const isSameDay =
-      createdAt.getFullYear() === now.getFullYear() &&
-      createdAt.getMonth() === now.getMonth() &&
-      createdAt.getDate() === now.getDate();
-
+    const isSameDay = createdAt.getFullYear() === now.getFullYear() && createdAt.getMonth() === now.getMonth() && createdAt.getDate() === now.getDate();
     if (expired || !isSameDay) {
-      // 🔹 Eliminar token viejo o expirado para no acumular
       await req.db.collection("tokens").deleteOne({ token });
-      return res.status(401).json({
-        valid: false,
-        message: expired
-          ? "Token expirado. Inicia sesión nuevamente."
-          : "El token ya no es válido porque pertenece a otro día."
-      });
+      return res.status(401).json({ valid: false, message: expired ? "Token expirado. Inicia sesión nuevamente." : "El token ya no es válido porque pertenece a otro día." });
     }
-
-    if (tokenRecord.email !== email)
-      return res.status(401).json({ valid: false, message: "Token no corresponde al usuario" });
-
-    if (tokenRecord.rol !== cargo)
-      return res.status(401).json({ valid: false, message: "Cargo no corresponde al usuario" });
-
+    if (tokenRecord.email !== email) return res.status(401).json({ valid: false, message: "Token no corresponde al usuario" });
+    if (tokenRecord.rol !== cargo) return res.status(401).json({ valid: false, message: "Cargo no corresponde al usuario" });
     return res.json({ valid: true, user: { email, cargo } });
   } catch (err) {
     console.error("Error validando token:", err);

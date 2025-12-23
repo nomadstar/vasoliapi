@@ -85,6 +85,23 @@ const allowedOrigins = allowAll
       .filter(Boolean)
       .filter((v, i, a) => a.indexOf(v) === i); // unique
 
+// Log allowed origins al arrancar (mascara URIs que parezcan contener credenciales)
+function maskOriginForLog(o) {
+  if (!o) return o;
+  // Si parece una conexión a DB u contiene user:pass, la enmascaramos
+  if (/mongodb(:|\+srv)/i.test(o) || /:\/\/.*:.*@/.test(o)) return '[MASKED]';
+  return o;
+}
+
+if (process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development') {
+  try {
+    const display = Array.isArray(allowedOrigins) ? allowedOrigins.map(maskOriginForLog) : [maskOriginForLog(String(allowedOrigins))];
+    console.info('CORS: allowedOrigins=', display.join(', '));
+  } catch (e) {
+    console.info('CORS: allowedOrigins (error al formatear)');
+  }
+}
+
 // Comprueba si un origin pertenece a la red local (IP privada, localhost, .local, .internal)
 function isLocalNetworkOrigin(origin) {
   if (!origin) return false;
@@ -155,6 +172,58 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+// Detectar solicitudes internas y marcar en `req.isInternal`.
+function isPrivateIp(ip) {
+  if (!ip) return false;
+  // limpiar formato IPv6 mapeado ::ffff:192.168.0.1
+  const cleaned = ip.replace(/^::ffff:/, '').split('%')[0];
+  const parts = cleaned.split('.');
+  if (parts.length === 4 && parts.every(p => p !== '' && !isNaN(Number(p)))) {
+    const [a, b] = parts.map(n => Number(n));
+    if (a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 127) return true;
+    return false;
+  }
+  // Simple IPv6 checks
+  if (cleaned === '::1') return true;
+  if (/^fe80:/i.test(cleaned)) return true;
+  return false;
+}
+
+function isInternalRequest(req) {
+  try {
+    // 1) Host header contains internal domains
+    const host = (req.headers.host || '').toLowerCase();
+    if (host && (host.includes('.internal') || host.includes('.lan') || host.includes('railway.internal'))) return true;
+
+    // 2) Origin header that is local (uses isLocalNetworkOrigin)
+    const origin = req.headers.origin;
+    if (origin && isLocalNetworkOrigin(origin)) return true;
+
+    // 3) X-Forwarded-For or req.ip
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) {
+      const first = String(xff).split(',')[0].trim();
+      if (isPrivateIp(first)) return true;
+    }
+    const ip = req.ip || req.connection && req.connection.remoteAddress;
+    if (ip && isPrivateIp(String(ip))) return true;
+  } catch (e) {
+    return false;
+  }
+  return false;
+}
+
+app.use((req, res, next) => {
+  req.isInternal = isInternalRequest(req);
+  if (req.isInternal && process.env.LOG_LEVEL === 'debug') {
+    console.info('Request marked as internal:', req.method, req.url, 'Host:', req.headers.host, 'Origin:', req.headers.origin);
+  }
+  next();
+});
 
 // Middleware para manejar errores de CORS de manera más informativa
 app.use((err, req, res, next) => {
