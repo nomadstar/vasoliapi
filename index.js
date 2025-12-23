@@ -2,16 +2,44 @@ const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 
-// Cargar .env: primero intenta la carpeta del paquete, luego la carpeta padre (raíz del proyecto)
-const envLocal = path.resolve(__dirname, '.env');
-const envParent = path.resolve(__dirname, '..', '.env');
-if (fs.existsSync(envLocal)) {
-  dotenv.config({ path: envLocal });
-} else if (fs.existsSync(envParent)) {
-  dotenv.config({ path: envParent });
-} else {
-  // fallback: intenta cargar por defecto (busca en process.cwd())
-  dotenv.config();
+// Cargar .env con logging y soporte básico para plantillas de Railway
+function loadEnv() {
+  const envLocal = path.resolve(__dirname, '.env');
+  const envParent = path.resolve(__dirname, '..', '.env');
+  let res;
+  if (fs.existsSync(envLocal)) {
+    res = dotenv.config({ path: envLocal });
+    console.info('dotenv: cargado desde', envLocal);
+  } else if (fs.existsSync(envParent)) {
+    res = dotenv.config({ path: envParent });
+    console.info('dotenv: cargado desde', envParent);
+  } else {
+    res = dotenv.config();
+    console.info('dotenv: cargado desde process.cwd() (fallback)');
+  }
+  if (res.error) console.warn('dotenv load error:', res.error);
+}
+loadEnv();
+
+// Expande placeholders tipo ${VAR} o ${{service.VAR}} usando process.env
+function expandEnvPlaceholders(input) {
+  if (!input || typeof input !== 'string') return input;
+  return input.replace(/\$\{\{([^}]+)\}\}|\$\{([^}]+)\}/g, (_, g1, g2) => {
+    const key = (g1 || g2 || '').trim();
+    if (!key) return '';
+    // Pruebas de lookup: exacto, con puntos->underscore, uppercase
+    const candidates = [
+      key,
+      key.replace(/\./g, '_'),
+      key.toUpperCase(),
+      key.replace(/\./g, '_').toUpperCase()
+    ];
+    for (const c of candidates) {
+      if (Object.prototype.hasOwnProperty.call(process.env, c) && process.env[c]) return process.env[c];
+    }
+    console.warn('No se resolvió placeholder de env:', key);
+    return '';
+  });
 }
 
 const express = require("express");
@@ -41,12 +69,17 @@ app.set('trust proxy', 1); // permite leer X-Forwarded-For cuando hay proxy/load
 const allowAll = (String(process.env.CORS_ALLOW_ALL || '').toLowerCase() === 'true');
 const envFrontend = (process.env.FRONTEND_URL || '').trim();
 const defaultOrigins = 'http://localhost:5173,http://localhost:3000,https://vasoliweb-production.up.railway.app,https://vasoliltdaapi.vercel.app';
+
+// Leer orígenes desde env y expandir placeholders (Railway templates)
+const rawOrigins = process.env.CORS_ORIGINS || (envFrontend ? envFrontend + ',' + defaultOrigins : defaultOrigins);
+const expandedOrigins = expandEnvPlaceholders(rawOrigins || '');
 const allowedOrigins = allowAll
   ? ['*']
-  : (process.env.CORS_ORIGINS || (envFrontend ? envFrontend + ',' + defaultOrigins : defaultOrigins))
+  : (expandedOrigins)
       .split(',')
       .map(o => o.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter((v, i, a) => a.indexOf(v) === i); // unique
 
 const corsOptions = {
   origin: (origin, callback) => {
