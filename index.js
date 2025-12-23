@@ -253,6 +253,23 @@ app.use((req, res, next) => {
 // Middleware para manejar errores de CORS de manera más informativa
 app.use((err, req, res, next) => {
   if (err && err.message === 'Not allowed by CORS') {
+    // Log detallado del intento bloqueado
+    try {
+      const who = {
+        time: new Date().toISOString(),
+        ip: req.ip || req.connection && req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown',
+        method: req.method,
+        url: req.originalUrl || req.url,
+        origin: req.headers.origin || null,
+        host: req.headers.host || null,
+        ua: req.headers['user-agent'] || null,
+        referer: req.headers.referer || req.headers.referrer || null
+      };
+      console.warn('CORS blocked request:', JSON.stringify(who), 'allowedOrigins:', allowedOrigins);
+    } catch (logErr) {
+      console.warn('CORS blocked (failed to format log)', logErr);
+    }
+
     res.status(403).json({
       error: 'CORS error: Origin not allowed',
       origin: req.headers.origin,
