@@ -45,7 +45,11 @@ function expandEnvPlaceholders(input) {
 const express = require("express");
 const cors = require("cors");
 const { MongoClient } = require("mongodb");
-const MONGO_URI = process.env.MONGO_URI || "";
+// Resolver MONGO_URI y expandir placeholders (si vienen de Railway templating)
+const MONGO_URI_RAW = process.env.MONGO_URI || "";
+const MONGO_URI = (typeof expandEnvPlaceholders === 'function')
+  ? String(expandEnvPlaceholders(MONGO_URI_RAW || '')).trim()
+  : String(MONGO_URI_RAW || '').trim();
 
 // Importar rutas
 const authRoutes = require("./endpoints/auth");
@@ -133,21 +137,32 @@ app.use((err, req, res, next) => {
 });
 
 // Configurar conexión a MongoDB (desde variable de entorno)
-let client;
-let db;
-
-if (MONGO_URI) {
-  client = new MongoClient(MONGO_URI);
-} else {
-  console.warn("MONGO_URI no definido — la API funcionará sin conexión a MongoDB.");
-}
+let client = null;
+let db = null;
 
 async function connectDB() {
-  if (!MONGO_URI) return null;
+  if (!MONGO_URI) {
+    console.warn("MONGO_URI no definido — la API funcionará sin conexión a MongoDB.");
+    return null;
+  }
+
+  // Validar esquema básico antes de instanciar MongoClient
+  if (!(MONGO_URI.startsWith('mongodb://') || MONGO_URI.startsWith('mongodb+srv://'))) {
+    console.warn('MONGO_URI parece inválida o contiene un placeholder no resuelto:', MONGO_URI);
+    return null;
+  }
+
   if (!db) {
-    await client.connect();
-    db = client.db("Vasoli");
-    console.log("Conectado a MongoDB");
+    try {
+      if (!client) client = new MongoClient(MONGO_URI);
+      await client.connect();
+      db = client.db(process.env.DB_NAME || "Vasoli");
+      console.log("Conectado a MongoDB");
+    } catch (err) {
+      console.error("Error al conectar con MongoDB:", err && err.stack ? err.stack : err);
+      // devolver null para que la API siga funcionando sin BD en entornos de test
+      return null;
+    }
   }
   return db;
 }
