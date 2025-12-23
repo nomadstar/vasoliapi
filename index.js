@@ -6,18 +6,34 @@ const dotenv = require('dotenv');
 function loadEnv() {
   const envLocal = path.resolve(__dirname, '.env');
   const envParent = path.resolve(__dirname, '..', '.env');
-  let res;
-  if (fs.existsSync(envLocal)) {
-    res = dotenv.config({ path: envLocal });
-    console.info('dotenv: cargado desde', envLocal);
-  } else if (fs.existsSync(envParent)) {
-    res = dotenv.config({ path: envParent });
-    console.info('dotenv: cargado desde', envParent);
-  } else {
-    res = dotenv.config();
-    console.info('dotenv: cargado desde process.cwd() (fallback)');
+
+  function tryLoadFile(p) {
+    try {
+      let content = fs.readFileSync(p, 'utf8');
+      // Eliminar líneas que comiencen con // (comentarios JS) para compatibilidad
+      const cleaned = content.split(/\r?\n/).filter(line => !/^\s*\/\//.test(line)).join('\n');
+      const parsed = dotenv.parse(cleaned);
+      // Sólo definir en process.env si no está definido (no sobrescribir)
+      Object.entries(parsed).forEach(([k, v]) => {
+        if (!Object.prototype.hasOwnProperty.call(process.env, k) || process.env[k] === '') {
+          process.env[k] = v;
+        }
+      });
+      console.info('dotenv: cargado desde', p);
+      return parsed;
+    } catch (err) {
+      console.warn('dotenv load error for', p, err && err.message ? err.message : err);
+      return null;
+    }
   }
-  if (res.error) console.warn('dotenv load error:', res.error);
+
+  if (fs.existsSync(envLocal)) return tryLoadFile(envLocal);
+  if (fs.existsSync(envParent)) return tryLoadFile(envParent);
+
+  const res = dotenv.config();
+  if (res.error) console.warn('dotenv config error:', res.error);
+  else console.info('dotenv: cargado desde process.cwd() (fallback)');
+  return res.parsed || null;
 }
 loadEnv();
 
@@ -106,12 +122,20 @@ if (process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development')
 function isLocalNetworkOrigin(origin) {
   if (!origin) return false;
   try {
-    const url = new URL(origin);
+    // Intentar parsear como URL; si falla, prefijar http:// y reintentar
+    let url;
+    try {
+      url = new URL(origin);
+    } catch (e) {
+      url = new URL(origin.startsWith('http') ? origin : `http://${origin}`);
+    }
     const host = url.hostname;
     if (!host) return false;
     const lc = host.toLowerCase();
     if (lc === 'localhost' || lc === '::1' || lc === '127.0.0.1') return true;
     if (lc.endsWith('.local') || lc.endsWith('.lan') || lc.endsWith('.internal')) return true;
+    // Hostnames sin puntos (p. ej. 'backend') tratarlos como internos
+    if (!host.includes('.') && host.length > 0) return true;
     // IPv4 private ranges
     const ipv4 = /^\d+\.\d+\.\d+\.\d+$/.test(host);
     if (ipv4) {
@@ -123,7 +147,7 @@ function isLocalNetworkOrigin(origin) {
       if (a === 192 && b === 168) return true; // 192.168.0.0/16
       return false;
     }
-    // IPv6 local prefixes (simple checks)
+    // IPv6 simple checks
     if (host.startsWith('fe80') || host.startsWith('fc') || host.startsWith('fd')) return true;
     return false;
   } catch (e) {
