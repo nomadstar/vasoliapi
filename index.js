@@ -85,12 +85,45 @@ const allowedOrigins = allowAll
       .filter(Boolean)
       .filter((v, i, a) => a.indexOf(v) === i); // unique
 
+// Comprueba si un origin pertenece a la red local (IP privada, localhost, .local, .internal)
+function isLocalNetworkOrigin(origin) {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    const host = url.hostname;
+    if (!host) return false;
+    const lc = host.toLowerCase();
+    if (lc === 'localhost' || lc === '::1' || lc === '127.0.0.1') return true;
+    if (lc.endsWith('.local') || lc.endsWith('.lan') || lc.endsWith('.internal')) return true;
+    // IPv4 private ranges
+    const ipv4 = /^\d+\.\d+\.\d+\.\d+$/.test(host);
+    if (ipv4) {
+      const parts = host.split('.').map(n => parseInt(n, 10));
+      if (parts.length !== 4 || parts.some(isNaN)) return false;
+      const [a, b] = parts;
+      if (a === 10) return true; // 10.0.0.0/8
+      if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+      if (a === 192 && b === 168) return true; // 192.168.0.0/16
+      return false;
+    }
+    // IPv6 local prefixes (simple checks)
+    if (host.startsWith('fe80') || host.startsWith('fc') || host.startsWith('fd')) return true;
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
 const corsOptions = {
   origin: (origin, callback) => {
     // Permite requests de same-origin (curl/local) donde origin es undefined
     if (!origin) return callback(null, true);
     if (allowAll) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (isLocalNetworkOrigin(origin)) {
+      if (process.env.LOG_LEVEL === 'debug') console.info('CORS: allowing local network origin', origin);
+      return callback(null, true);
+    }
     console.error(`CORS blocked origin: ${origin}. Allowed origins:`, allowedOrigins);
     return callback(new Error('Not allowed by CORS'), false);
   },
