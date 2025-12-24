@@ -383,8 +383,13 @@ module.exports = app;
 // Si se ejecuta directamente (node index.js), arrancar un servidor HTTP
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-  // Permitir configurar HOSTNAME como service variable (por ejemplo '::')
-  const HOST = process.env.HOSTNAME || '::';
+  // Preferir variable `HOST` y no usar el nombre del contenedor (`HOSTNAME`) para bind.
+  // El valor de `HOSTNAME` suele ser el id del contenedor y NO es una dirección válida
+  // para hacer bind; en entornos cloud debemos escuchar en todas las interfaces.
+  const HOST = process.env.HOST || '0.0.0.0';
+  if (process.env.HOSTNAME && !process.env.HOST) {
+    console.warn('Ignorando process.env.HOSTNAME al bindear; usando', HOST);
+  }
   app.listen(PORT, HOST, () => {
     console.log(`Servidor Express escuchando en ${HOST}:${PORT}`);
   });
