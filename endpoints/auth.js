@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const { ObjectId } = require('mongodb');
 const multer = require('multer');
 const { validarToken } = require('../utils/validarToken');
+const useragent = require('useragent');
 const { hashPassword, encrypt, createBlindIndex, verifyPassword, decrypt } = require("../utils/seguridad.helper");
 
 let activeTokens = [];
