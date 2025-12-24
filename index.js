@@ -30,7 +30,15 @@ function loadEnv() {
   if (fs.existsSync(envLocal)) return tryLoadFile(envLocal);
   if (fs.existsSync(envParent)) return tryLoadFile(envParent);
 
-  const res = dotenv.config();
+  const envCwd = path.resolve(process.cwd(), '.env');
+  if (!fs.existsSync(envCwd)) {
+    if (process.env.NODE_ENV !== 'production' && !process.env.RAILWAY && !process.env.VERCEL) {
+      console.warn('dotenv: no se encontró archivo .env en rutas conocidas');
+    }
+    return null;
+  }
+
+  const res = dotenv.config({ path: envCwd });
   if (res.error) console.warn('dotenv config error:', res.error);
   else console.info('dotenv: cargado desde process.cwd() (fallback)');
   return res.parsed || null;
