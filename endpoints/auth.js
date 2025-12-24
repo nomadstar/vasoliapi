@@ -4,7 +4,7 @@ const crypto = require("crypto");
 const { ObjectId } = require('mongodb');
 const multer = require('multer');
 const { validarToken } = require('../utils/validarToken');
-const { encrypt, createBlindIndex, verifyPassword, decrypt } = require("../utils/seguridad.helper");
+const { hashPassword, encrypt, createBlindIndex, verifyPassword, decrypt } = require("../utils/seguridad.helper");
 
 let activeTokens = [];
 const TOKEN_EXPIRATION = 1000 * 60 * 60;
