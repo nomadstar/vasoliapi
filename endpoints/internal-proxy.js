@@ -21,11 +21,22 @@ function collectRequestBody(req) {
 }
 
 router.all('/*', async (req, res) => {
-  // Seguridad: permitir si la petición ya fue marcada como interna por el middleware
-  // o si trae el header X-Internal-Secret correcto.
+  // Seguridad: permitir si la petición ya fue marcada como interna por el middleware,
+  // o si trae el header X-Internal-Secret correcto, o si proviene de un frontend listado
+  // en CORS_ORIGINS (permite llamadas desde navegador de esos frontends).
   if (!req.isInternal) {
-    if (!INTERNAL_SECRET || req.headers['x-internal-secret'] !== INTERNAL_SECRET) {
-      return res.status(403).json({ error: 'Forbidden - internal proxy requires internal request or valid secret' });
+    const origin = (req.headers.origin || '').toString();
+    const corsEnv = String(process.env.CORS_ORIGINS || '') || '';
+    const allowedFromEnv = corsEnv.split(',').map(s => s.trim()).filter(Boolean);
+    const originAllowed = origin && allowedFromEnv.some(a => a.toLowerCase() === origin.toLowerCase());
+    const frontendAllow = origin && (origin.includes('vasoliweb-testing.up.railway.app') || origin.includes('vasoliweb.up.railway.app') || origin.startsWith('http://localhost') || origin.startsWith('https://localhost'));
+
+    if (INTERNAL_SECRET && req.headers['x-internal-secret'] && req.headers['x-internal-secret'] === INTERNAL_SECRET) {
+      // allow via secret header
+    } else if (originAllowed || frontendAllow) {
+      // allow because origin is trusted (CORS protects browser environments)
+    } else {
+      return res.status(403).json({ error: 'Forbidden - internal proxy requires internal request, valid secret, or trusted origin' });
     }
   }
 
