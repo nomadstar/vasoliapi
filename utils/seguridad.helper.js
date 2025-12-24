@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const argon2 = require("argon2");
 
 // En producción, usa process.env.MASTER_KEY (debe ser de 32 bytes / 64 caracteres hex)
-const MASTER_KEY = Buffer.from(process.env.MASTER_KEY || "]UY@UhC2$}!ixuC)KJ3bN5*@Rg22=8ux_DW0Ba@{N+uN4i#Q-=.phv;DcRhBN@N9", 'hex');
+const MASTER_KEY = Buffer.from(process.env.MASTER_KEY || "d02abe55478ba84f9495b69b49256b878e17f32bb8e26ca6fc8ddcda789cb3ec", 'hex');
 const ALGORITHM = 'aes-256-gcm';
 
 /**
