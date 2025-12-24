@@ -552,4 +552,39 @@ router.get('/user/:userId/unread-count', async (req, res) => {
   }
 });
 
+// Alias compatible hacia atrás: aceptar GET /api/noti/:userId/unread-count
+// Permite pasar un email sin necesidad de que sea ObjectId.
+router.get('/:userId/unread-count', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!req.db) return res.status(503).json({ error: 'Servicio no disponible: base de datos no conectada' });
+
+    const users = req.db.collection('usuarios');
+    let usuario = null;
+
+    // Intentar por ObjectId primero (si aplica)
+    if (ObjectId.isValid(userId)) {
+      try {
+        usuario = await users.findOne({ _id: new ObjectId(userId) }, { projection: { notificaciones: 1 } });
+      } catch (e) {
+        // ignore and try other lookups
+        usuario = null;
+      }
+    }
+
+    // Si no resultó, intentar por mail / id / nombre
+    if (!usuario) {
+      usuario = await users.findOne({ $or: [{ mail: userId }, { id: userId }, { nombre: userId }] }, { projection: { notificaciones: 1 } });
+    }
+
+    if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const unreadCount = (usuario.notificaciones || []).filter(n => n.leido === false).length;
+    res.json({ unreadCount });
+  } catch (err) {
+    console.error('Error al obtener contador de no leídas (alias):', err);
+    res.status(500).json({ error: 'Error al obtener contador de notificaciones no leídas', detalles: err.message });
+  }
+});
+
 module.exports = router;
