@@ -383,7 +383,9 @@ module.exports = app;
 // Si se ejecuta directamente (node index.js), arrancar un servidor HTTP
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`Servidor Express escuchando en puerto ${PORT}`);
+  // Permitir configurar HOSTNAME como service variable (por ejemplo '::')
+  const HOST = process.env.HOSTNAME || '::';
+  app.listen(PORT, HOST, () => {
+    console.log(`Servidor Express escuchando en ${HOST}:${PORT}`);
   });
 }
