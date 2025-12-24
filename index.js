@@ -81,7 +81,6 @@ const flujos = require("./endpoints/flujos");
 const departments = require("./endpoints/departments");
 const tareas = require("./endpoints/tareas");
 const mailRoutes = require("./endpoints/mail");
-const gen = require("./endpoints/Generador");
 const noti = require("./endpoints/notificaciones");
 const menu = require("./endpoints/web");
 const plantillas = require("./endpoints/plantillas");
@@ -365,7 +364,6 @@ app.use('/internal-proxy', internalProxy);
 //rutas sin uso
 app.use("/api/menu", menu);
 app.use("/api/plantillas", plantillas);
-app.use("/api/generador", gen);
 app.use("/api/historial", historial);
 app.use("/api/drive", googleDrive);
 app.use("/api/analytics", analytics);
