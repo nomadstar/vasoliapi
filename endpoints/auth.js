@@ -48,10 +48,10 @@ router.get("/:mail", async (req, res) => {
   }
 });
 
-router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
-
+router.post("/login", async (req, res, next) => {
   try {
+    const { email, password } = req.body;
+
     // Verificar que req.db existe
     if (!req.db) {
       console.error("Database connection not available");
@@ -93,8 +93,15 @@ router.post("/login", async (req, res) => {
 
     return res.json({ success: true, token, usr });
   } catch (err) {
-    console.error("Error en login:", err);
-    return res.status(500).json({ error: "Error interno en login" });
+    console.error('Auth error:', err && err.stack ? err.stack : err);
+    const status = (err && err.status) ? err.status : 500;
+    if (process.env.LOG_LEVEL === 'debug') {
+      return res.status(status).json({
+        error: err.message || 'Error interno de autenticación',
+        details: err && err.stack ? String(err.stack).split('\n').slice(0,10).join('\n') : undefined
+      });
+    }
+    return res.status(status).json({ error: 'Error al autenticar, revisar logs del servidor' });
   }
 });
 
