@@ -110,6 +110,18 @@ const allowedOrigins = allowAll
       .filter(Boolean)
       .filter((v, i, a) => a.indexOf(v) === i); // unique
 
+// Añadir exposición directa del host interno de Railway para tráfico entre servicios
+try {
+  const internalHostHttps = 'https://vasoliapi.railway.internal';
+  const internalHostHttp = 'http://vasoliapi.railway.internal';
+  if (!allowAll && Array.isArray(allowedOrigins)) {
+    if (!allowedOrigins.includes(internalHostHttps)) allowedOrigins.push(internalHostHttps);
+    if (!allowedOrigins.includes(internalHostHttp)) allowedOrigins.push(internalHostHttp);
+  }
+} catch (e) {
+  // no hacer nada si hay algún problema al mutar allowedOrigins
+}
+
 // Log allowed origins al arrancar (mascara URIs que parezcan contener credenciales)
 function maskOriginForLog(o) {
   if (!o) return o;
