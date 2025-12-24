@@ -1,5 +1,6 @@
 // routes/notificaciones.helper.js
 const { ObjectId } = require("mongodb");
+const { createBlindIndex } = require("./seguridad.helper");
 
 /**
  * Añade una notificación a uno o varios usuarios
@@ -18,7 +19,7 @@ async function addNotification(
   db,
   {
     userId,
-    filtro,
+    filtro = {},
     titulo,
     descripcion,
     prioridad = 1,
@@ -27,8 +28,8 @@ async function addNotification(
     actionUrl = null,
   }
 ) {
-  if (!userId && !filtro) {
-    throw new Error("Debe proporcionar un userId o un filtro de usuarios (rol/cargo).");
+  if (!userId && (!filtro || Object.keys(filtro).length === 0)) {
+    throw new Error("Debe proporcionar un userId o un filtro de usuarios (rol/cargo/email).");
   }
 
   const notificacion = {
@@ -43,14 +44,37 @@ async function addNotification(
     fecha_creacion: new Date(),
   };
 
-  const query = userId ? { _id: new ObjectId(userId) } : filtro;
-  console.log(query);
-  const result = await db.collection("usuarios").updateMany(query, {
-    $push: { notificaciones: notificacion },
-  });
-  console.log(result);
+  let query = {};
 
-  return { notificacion, modifiedCount: result.modifiedCount };
+  if (userId) {
+    // Si hay userId, priorizamos la búsqueda por ID único
+    query = { _id: new ObjectId(userId) };
+  } else {
+    // Si se usa filtro, clonamos para no mutar el objeto original
+    query = { ...filtro };
+
+    // ⚠️ CRÍTICO: Si el filtro incluye 'mail', debemos convertirlo a 'mail_index'
+    if (query.mail) {
+      const normalizedEmail = query.mail.toLowerCase().trim();
+      query.mail_index = createBlindIndex(normalizedEmail);
+      delete query.mail; // Eliminamos el mail en texto plano para que no falle la búsqueda en DB
+    }
+  }
+
+  try {
+    const result = await db.collection("usuarios").updateMany(query, {
+      $push: { notificaciones: notificacion },
+    });
+
+    return { 
+      success: true,
+      notificacion, 
+      modifiedCount: result.modifiedCount 
+    };
+  } catch (err) {
+    console.error("Error al añadir notificación:", err);
+    throw new Error("Error interno al procesar la notificación.");
+  }
 }
 
 module.exports = { addNotification };

@@ -90,8 +90,17 @@ const generateAndSend2FACode = async (db, user, type) => {
 
 router.get("/", async (req, res) => {
   try {
-    const usr = await req.db.collection("usuarios").find().toArray();
-    res.json(usr);
+    const usuarios = await req.db.collection("usuarios").find().toArray();
+    
+    // Desencriptar cada usuario para que sea legible en el cliente
+    const decryptedUsers = usuarios.map(u => ({
+      ...u,
+      nombre: u.nombre ? decrypt(u.nombre) : "",
+      apellido: u.apellido ? decrypt(u.apellido) : "",
+      mail: u.mail ? decrypt(u.mail) : ""
+    }));
+
+    res.json(decryptedUsers);
   } catch (err) {
     res.status(500).json({ error: "Error al obtener usuarios" });
   }
@@ -100,14 +109,18 @@ router.get("/", async (req, res) => {
 
 router.get("/:mail", async (req, res) => {
   try {
+    const normalizedEmail = req.params.mail.toLowerCase().trim();
     const usr = await req.db
       .collection("usuarios")
-      .findOne({ mail: req.params.mail});
+      .findOne({ mail_index: createBlindIndex(normalizedEmail) });
 
     if (!usr) return res.status(404).json({ error: "Usuario no encontrado" });
     
-    // ⚠️ CAMBIO: devolver 'departamento' en lugar de 'empresa'
-    res.json({id: usr._id, departamento: usr.departamento || usr.empresa, cargo: usr.cargo});
+    res.json({
+      id: usr._id, 
+      departamento: usr.departamento || usr.empresa, 
+      cargo: usr.cargo
+    });
   } catch (err) {
     res.status(500).json({ error: "Error al obtener Usuario" });
   }
@@ -115,10 +128,9 @@ router.get("/:mail", async (req, res) => {
 
 router.get("/full/:mail", async (req, res) => {
   try {
-    const userMail = req.params.mail;
+    const userMail = req.params.mail.toLowerCase().trim();
     const authHeader = req.headers.authorization;
 
-    // Permitir solicitudes internas sin token
     if (!req.isInternal) {
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: "Token de autenticación requerido" });
@@ -128,40 +140,28 @@ router.get("/full/:mail", async (req, res) => {
       if (!validationResult.ok) {
         return res.status(401).json({ error: `Acceso no autorizado: ${validationResult.reason}` });
       }
-    } else {
-      if (process.env.LOG_LEVEL === 'debug') console.info('/full/:mail - internal request, skipping token validation');
     }
     
-    // 2. BUSCAR EL USUARIO POR CORREO
     const usr = await req.db
       .collection("usuarios")
-      .findOne({ mail: userMail });
+      .findOne({ mail_index: createBlindIndex(userMail) });
 
     if (!usr) return res.status(404).json({ error: "Usuario no encontrado" });
 
-    // 3. FILTRADO DE CAMPOS SENSIBLES (Proyección manual)
     const profileData = {
-      // Datos de identificación (no sensibles)
       _id: usr._id,
-      id: usr.id, // Si usas un ID secundario
-      nombre: usr.nombre,
-      apellido: usr.apellido,
-      mail: usr.mail,
-      
-      // Datos de perfil/rol
-      // Nota: Si ya migraste a 'departamento', usa 'usr.departamento'
+      nombre: decrypt(usr.nombre),
+      apellido: decrypt(usr.apellido),
+      mail: decrypt(usr.mail),
       departamento: usr.departamento || usr.empresa, 
       cargo: usr.cargo,
       rol: usr.rol,
-      estado: usr.estado, // Asumiendo que existe
-      
+      estado: usr.estado,
       createdAt: usr.createdAt,
       updatedAt: usr.updatedAt,                   
     };
 
-    // Devolver solo el objeto filtrado
     res.json(profileData);
-    
   } catch (err) {
     console.error("Error al obtener Usuario completo:", err);
     res.status(500).json({ error: "Error al obtener Usuario completo" });
@@ -486,8 +486,12 @@ router.post("/borrarpass", async (req, res) => {
   }
 
   try {
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Buscamos el registro de recuperación. 
+    // Nota: 'recovery_codes' suele guardar el mail en plano para facilitar el matching con el input del usuario.
     const recoveryRecord = await req.db.collection("recovery_codes").findOne({
-      email: email.toLowerCase().trim(),
+      email: normalizedEmail,
       code: code,
       active: true
     });
@@ -504,6 +508,7 @@ router.post("/borrarpass", async (req, res) => {
       return res.status(401).json({ message: "Código expirado. Solicita uno nuevo." });
     }
 
+    // Marcar como consumido
     await req.db.collection("recovery_codes").updateOne(
       { _id: recoveryRecord._id },
       { $set: { active: false, revokedAt: now, reason: "consumed" } }
@@ -515,6 +520,7 @@ router.post("/borrarpass", async (req, res) => {
       return res.status(404).json({ message: "Error interno: ID de usuario no encontrado." });
     }
 
+    // Retornamos el userId para que el frontend pueda proceder al siguiente paso (cambiar contraseña)
     return res.json({ success: true, uid: userId });
 
   } catch (err) {
@@ -690,8 +696,27 @@ router.post("/disable-2fa", async (req, res) => {
 
 router.get("/logins/todos", async (req, res) => {
   try {
-    const tkn = await req.db.collection("ingresos").find().toArray();
-    res.json(tkn);
+    const ingresos = await req.db.collection("ingresos").find().toArray();
+    
+    // Desencriptamos los datos del usuario dentro del historial de ingresos si fuera necesario.
+    // Si al insertar en 'ingresos' ya insertaste el nombre plano, este map no romperá nada,
+    // pero asegura que si están cifrados, se muestren bien.
+    const decryptedIngresos = ingresos.map(i => {
+      try {
+        return {
+          ...i,
+          usr: {
+            ...i.usr,
+            name: i.usr?.name ? (i.usr.name.includes(':') ? decrypt(i.usr.name) : i.usr.name) : "Desconocido",
+            email: i.usr?.email ? (i.usr.email.includes(':') ? decrypt(i.usr.email) : i.usr.email) : "Desconocido"
+          }
+        };
+      } catch (e) {
+        return i; // Si falla el decrypt, devuelve el registro original
+      }
+    });
+
+    res.json(decryptedIngresos);
   } catch (err) {
     res.status(500).json({ error: "Error al obtener ingresos" });
   }
@@ -754,33 +779,33 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "Todos los campos son obligatorios" });
     }
     
-    const existingUser = await req.db.collection("usuarios").findOne({ mail });
+    const normalizedEmail = mail.toLowerCase().trim();
+    const mailIndex = createBlindIndex(normalizedEmail);
+
+    const existingUser = await req.db.collection("usuarios").findOne({ mail_index: mailIndex });
     if (existingUser) {
       return res.status(400).json({ error: "El usuario ya existe" });
     }
     
     const newUser = {
-      nombre,
-      apellido,
-      mail,
+      nombre: encrypt(nombre),
+      apellido: encrypt(apellido),
+      mail: encrypt(normalizedEmail),
+      mail_index: mailIndex,
       departamento, 
       cargo,
       rol,
-      pass: "",
-      estado: estado,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      pass: "", // Se establece luego en set-password
+      estado: estado || "pendiente",
+      createdAt: new Date(),
+      updatedAt: new Date()
     };
     
     const result = await req.db.collection("usuarios").insertOne(newUser);
-    const createdUser = await req.db.collection("usuarios").findOne({ 
-      _id: result.insertedId 
-    });
-    
     res.status(201).json({
       success: true,
       message: "Usuario registrado exitosamente",
-      user: createdUser
+      userId: result.insertedId
     });
   } catch (err) {
     console.error("Error al registrar usuario:", err);
@@ -792,20 +817,18 @@ router.post("/register", async (req, res) => {
 router.put("/users/:id", async (req, res) => {
   try {
     const { nombre, apellido, mail, departamento, cargo, rol, estado } = req.body;
-    
-    if (!nombre || !apellido || !mail || !departamento || !cargo || !rol || !estado) {
-        return res.status(400).json({ error: "Todos los campos obligatorios son requeridos para la actualización" });
-    }
+    const normalizedEmail = mail.toLowerCase().trim();
     
     const updateData = {
-      nombre,
-      apellido,
-      mail,
+      nombre: encrypt(nombre),
+      apellido: encrypt(apellido),
+      mail: encrypt(normalizedEmail),
+      mail_index: createBlindIndex(normalizedEmail),
       departamento,
       cargo,
       rol,
       estado,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date()
     };
     
     const result = await req.db.collection("usuarios").updateOne(
@@ -813,25 +836,11 @@ router.put("/users/:id", async (req, res) => {
       { $set: updateData }
     );
 
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
+    if (result.matchedCount === 0) return res.status(404).json({ error: "Usuario no encontrado" });
     
-    const updatedUser = await req.db.collection("usuarios").findOne({
-      _id: new ObjectId(req.params.id)
-    });
-
-    res.json({
-      success: true,
-      message: "Usuario actualizado exitosamente",
-      user: updatedUser
-    });
+    res.json({ success: true, message: "Usuario actualizado exitosamente" });
   } catch (err) {
-    console.error("Error al actualizar usuario:", err);
-    if (err.message.includes("ObjectId")) {
-      return res.status(400).json({ error: "ID de usuario inválido" });
-    }
-    res.status(500).json({ error: "Error interno del servidor al actualizar" });
+    res.status(500).json({ error: "Error interno al actualizar" });
   }
 });
 
@@ -862,52 +871,31 @@ router.delete("/users/:id", async (req, res) => {
 router.post("/set-password", async (req, res) => {
   try {
     const { userId, password } = req.body;
-    if (!userId || !password) {
-      return res.status(400).json({ error: "UserId y contraseña son requeridos" });
+    if (!userId || !password || password.length < 4) {
+      return res.status(400).json({ error: "Datos insuficientes" });
     }
-    if (password.length < 4) {
-      return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres" });
-    }
-    const existingUser = await req.db.collection("usuarios").findOne({ 
-      _id: new ObjectId(userId) 
-    });
-    if (!existingUser) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-    if (existingUser.estado !== "pendiente") {
-      return res.status(400).json({ 
-        error: "La contraseña ya fue establecida anteriormente. Si necesitas cambiarla, contacta al administrador." 
-      });
-    }
+
+    // Hashear la contraseña antes de guardar
+    const hashedPassword = await hashPassword(password);
+
     const result = await req.db.collection("usuarios").updateOne(
-      { 
-        _id: new ObjectId(userId),
-        estado: "pendiente"
-      },
+      { _id: new ObjectId(userId), estado: "pendiente" },
       { 
         $set: { 
-          pass: password,
+          pass: hashedPassword,
           estado: "activo",
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date()
         } 
       }
     );
-    if (result.matchedCount === 0) {
-      return res.status(400).json({ 
-        error: "No se puede establecer la contraseña. Ya fue configurada anteriormente o el enlace expiró." 
-      });
-    }
-    res.json({ 
-      success: true, 
-      message: "Contraseña establecida exitosamente" 
-    });
 
-  } catch (error) {
-    console.error("Error al establecer contraseña:", error);
-    if (error.message.includes("ObjectId")) {
-      return res.status(400).json({ error: "ID de usuario inválido" });
+    if (result.matchedCount === 0) {
+      return res.status(400).json({ error: "No se puede establecer la contraseña o el usuario no está pendiente." });
     }
-    res.status(500).json({ error: "Error interno del servidor" });
+
+    res.json({ success: true, message: "Contraseña establecida correctamente" });
+  } catch (error) {
+    res.status(500).json({ error: "Error interno" });
   }
 });
 
