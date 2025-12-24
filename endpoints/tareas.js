@@ -1,5 +1,5 @@
 const express = require('express');
-const router = router = express.Router();
+const router = express.Router();
 const { ObjectId } = require('mongodb');
 const { createBlindIndex, decrypt } = require("../utils/seguridad.helper");
 
