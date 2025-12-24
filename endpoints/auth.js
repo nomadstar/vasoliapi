@@ -29,6 +29,64 @@ const upload = multer({
   }
 });
 
+const generateAndSend2FACode = async (db, user, type) => {
+  let EXPIRATION_TIME;
+  let subject;
+  let contextMessage;
+
+  if (type === '2FA_SETUP') {
+    EXPIRATION_TIME = 15 * 60 * 1000;
+    subject = 'Código de Activación de 2FA - Vasoli';
+    contextMessage = 'Hemos recibido una solicitud para **activar** la Autenticación de Dos Factores (2FA).';
+  } else if (type === '2FA_LOGIN') {
+    EXPIRATION_TIME = 5 * 60 * 1000;
+    subject = 'Código de Verificación de Acceso 2FA - Vasoli';
+    contextMessage = 'Estás intentando **iniciar sesión**. Ingresa el código en el sistema.';
+  } else {
+    throw new Error("Tipo de código 2FA inválido.");
+  }
+
+  const verificationCode = crypto.randomInt(100000, 999999).toString();
+  const expiresAt = new Date(Date.now() + EXPIRATION_TIME);
+  const userId = user._id.toString();
+
+  await db.collection("2fa_codes").updateMany(
+    { userId: userId, active: true, type: type },
+    { $set: { active: false, revokedAt: new Date(), reason: "new_code_issued" } }
+  );
+
+  await db.collection("2fa_codes").insertOne({
+    userId: userId,
+    code: verificationCode,
+    type: type,
+    createdAt: new Date(),
+    expiresAt: expiresAt,
+    active: true
+  });
+
+  const userEmail = decrypt(user.mail);
+  const userName = decrypt(user.nombre);
+
+  const minutes = EXPIRATION_TIME / 1000 / 60;
+  const htmlContent = `
+    <p>Hola ${userName},</p>
+    <p>${contextMessage}</p>
+    <p>Tu código de verificación es:</p>
+    <h2 style="color: #f94b16ff; font-size: 24px; text-align: center; border: 1px solid #f94b16ff; padding: 10px; border-radius: 8px;">
+      ${verificationCode}
+    </h2>
+    <p>Este código expira en ${minutes} minutos. Si no solicitaste esta acción, ignora este correo.</p>
+    <p>Saludos cordiales,</p>
+    <p>El equipo de Vasoli</p>
+  `;
+
+  await sendEmail({
+    to: userEmail,
+    subject: subject,
+    html: htmlContent
+  });
+};
+
 router.get("/", async (req, res) => {
   try {
     const usr = await req.db.collection("usuarios").find().toArray();
