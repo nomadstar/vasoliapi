@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const { ObjectId } = require('mongodb');
 const multer = require('multer');
 const { validarToken } = require('../utils/validarToken');
+const { encrypt, createBlindIndex, verifyPassword, decrypt } = require("../utils/seguridad.helper");
 
 let activeTokens = [];
 const TOKEN_EXPIRATION = 1000 * 60 * 60;
@@ -162,6 +163,558 @@ router.get("/full/:mail", async (req, res) => {
   }
 });
 
+router.get("/mantenimiento/migrar-pqc", async (req, res) => {
+    try {
+        const usuarios = await req.db.collection("usuarios").find().toArray();
+        let cont = 0;
+        for (let u of usuarios) {
+            const up = {};
+            if (u.pass && !u.pass.startsWith('$argon2')) up.pass = await hashPassword(u.pass);
+            if (u.nombre && !u.nombre.includes(':')) up.nombre = encrypt(u.nombre);
+            if (u.apellido && !u.apellido.includes(':')) up.apellido = encrypt(u.apellido);
+            if (u.mail && !u.mail.includes(':')) {
+                const cleanMail = u.mail.toLowerCase().trim();
+                up.mail = encrypt(cleanMail);
+                up.mail_index = createBlindIndex(cleanMail);
+            }
+            if (Object.keys(up).length > 0) {
+                await req.db.collection("usuarios").updateOne({ _id: u._id }, { $set: up });
+                cont++;
+            }
+        }
+        res.json({ success: true, message: `Migración finalizada. ${cont} registros procesados.` });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post("/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ success: false, message: "Datos incompletos" });
+  }
+
+  try {
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await req.db.collection("usuarios").findOne({
+      mail_index: createBlindIndex(normalizedEmail)
+    });
+
+    if (!user || !(await verifyPassword(user.pass, password))) {
+      return res.status(401).json({ success: false, message: "Credenciales inválidas" });
+    }
+
+    if (user.estado === "pendiente") {
+      return res.status(401).json({
+        success: false,
+        message: "Usuario pendiente de activación. Revisa tu correo."
+      });
+    }
+
+    if (user.estado === "inactivo") {
+      return res.status(401).json({
+        success: false,
+        message: "Usuario inactivo. Contacta al administrador."
+      });
+    }
+
+    if (user.twoFactorEnabled === true) {
+      await generateAndSend2FACode(req.db, user, '2FA_LOGIN');
+
+      return res.json({
+        success: true,
+        twoFA: true,
+        userId: user._id.toString(),
+        email: normalizedEmail, // IMPORTANTE: Devuelve también el email
+        message: "Se requiere código 2FA. Enviado a tu correo."
+      });
+    }
+
+    const now = getAhoraChile()
+
+    let finalToken = null;
+    let expiresAt = null;
+
+    const existingToken = await req.db.collection("tokens").findOne({
+      email: normalizedEmail,
+      active: true
+    });
+
+    if (existingToken && new Date(existingToken.expiresAt) > now) {
+      finalToken = existingToken.token;
+      expiresAt = existingToken.expiresAt;
+    } else {
+      if (existingToken) {
+        await req.db.collection("tokens").updateOne(
+          { _id: existingToken._id },
+          { $set: { active: false, revokedAt: now } }
+        );
+      }
+
+      finalToken = crypto.randomBytes(32).toString("hex");
+      expiresAt = new Date(Date.now() + TOKEN_EXPIRATION);
+
+      await req.db.collection("tokens").insertOne({
+        token: finalToken,
+        email: normalizedEmail,
+        userId: user._id.toString(),
+        rol: user.rol,
+        createdAt: now,
+        expiresAt,
+        active: true
+      });
+    }
+
+    let nombre = "";
+    try {
+      nombre = decrypt(user.nombre);
+    } catch {
+      nombre = user.nombre || "";
+    }
+
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const agent = useragent.parse(req.headers["user-agent"] || "Desconocido");
+
+    await req.db.collection("ingresos").insertOne({
+      usr: {
+        name: nombre,
+        email: normalizedEmail,
+        cargo: user.rol,
+        userId: user._id.toString()
+      },
+      ipAddress,
+      os: agent.os?.toString?.() || "Desconocido",
+      browser: agent.toAgent?.() || "Desconocido",
+      now
+    });
+
+    return res.json({
+      success: true,
+      token: finalToken,
+      usr: {
+        name: nombre,
+        email: normalizedEmail,
+        cargo: user.rol,
+        userId: user._id.toString()
+      }
+    });
+
+  } catch (err) {
+    console.error("Error en login:", err);
+    return res.status(500).json({ error: "Error interno en login" });
+  }
+});
+
+router.post("/verify-login-2fa", async (req, res) => {
+  const { email, verificationCode } = req.body;
+
+  console.log("DEBUG verify-login-2fa - Datos recibidos:", {
+    email: email,
+    verificationCode: verificationCode,
+    codeLength: verificationCode?.length
+  });
+
+  if (!email || !verificationCode || verificationCode.length !== 6) {
+    return res.status(400).json({
+      success: false,
+      message: "Datos incompletos o código inválido."
+    });
+  }
+
+  const now = new Date();
+
+  try {
+    // Buscar usuario por email (usando blind index)
+    const user = await req.db.collection("usuarios").findOne({
+      mail_index: createBlindIndex(email.toLowerCase().trim())
+    });
+
+    if (!user) {
+      console.log("DEBUG: Usuario no encontrado para email:", email);
+      return res.status(401).json({
+        success: false,
+        message: "Usuario no encontrado."
+      });
+    }
+
+    const userId = user._id.toString();
+    console.log("DEBUG: Usuario encontrado, ID:", userId);
+
+    // Buscar código 2FA activo para LOGIN
+    const codeRecord = await req.db.collection("2fa_codes").findOne({
+      userId: userId,
+      code: verificationCode,
+      type: '2FA_LOGIN',
+      active: true,
+      expiresAt: { $gt: now }
+    });
+
+    console.log("DEBUG: Código encontrado:", codeRecord);
+
+    if (!codeRecord) {
+      // Verificar si hay códigos pero expirados
+      const expiredCode = await req.db.collection("2fa_codes").findOne({
+        userId: userId,
+        code: verificationCode,
+        type: '2FA_LOGIN'
+      });
+
+      if (expiredCode) {
+        console.log("DEBUG: Código encontrado pero expirado o inactivo");
+        return res.status(401).json({
+          success: false,
+          message: "Código 2FA expirado. Solicita uno nuevo."
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        message: "Código 2FA incorrecto."
+      });
+    }
+
+    // Marcar código como usado
+    await req.db.collection("2fa_codes").updateOne(
+      { _id: codeRecord._id },
+      { $set: { active: false, usedAt: now } }
+    );
+
+    // ✅ RESTAURAR LÓGICA DE REUTILIZACIÓN DE TOKENS
+    let finalToken = null;
+    let expiresAt = null;
+    const userEmail = decrypt(user.mail);
+
+    const existingTokenRecord = await req.db.collection("tokens").findOne({
+      email: userEmail,
+      active: true
+    });
+
+    if (existingTokenRecord && new Date(existingTokenRecord.expiresAt) > now) {
+      finalToken = existingTokenRecord.token;
+      expiresAt = existingTokenRecord.expiresAt;
+    } else {
+      if (existingTokenRecord) {
+        await req.db.collection("tokens").updateOne(
+          { _id: existingTokenRecord._id },
+          { $set: { active: false, revokedAt: now } }
+        );
+      }
+
+      finalToken = crypto.randomBytes(32).toString("hex");
+      expiresAt = new Date(now.getTime() + TOKEN_EXPIRATION);
+
+      await req.db.collection("tokens").insertOne({
+        token: finalToken,
+        email: userEmail,
+        userId: userId,
+        rol: user.rol,
+        createdAt: now,
+        expiresAt,
+        active: true
+      });
+    }
+
+    // Registrar ingreso
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const userAgentString = req.headers['user-agent'] || 'Desconocido';
+    const agent = useragent.parse(userAgentString);
+
+    const userName = decrypt(user.nombre);
+    const usr = {
+      name: userName,
+      email: userEmail,
+      cargo: user.rol,
+      userId: userId
+    };
+
+    await req.db.collection("ingresos").insertOne({
+      usr,
+      ipAddress,
+      os: agent.os.toString(),
+      browser: agent.toAgent(),
+      now: now,
+    });
+
+    console.log("DEBUG: Login 2FA exitoso para usuario:", userEmail);
+
+    return res.json({
+      success: true,
+      token: finalToken,
+      usr
+    });
+  } catch (err) {
+    console.error("Error en verify-login-2fa:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Error interno en la verificación 2FA."
+    });
+  }
+});
+
+router.post("/recuperacion", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await req.db.collection("usuarios").findOne({
+      mail_index: createBlindIndex(email.toLowerCase().trim())
+    });
+
+    if (!user || user.estado === "inactivo") {
+      return res.status(404).json({ message: "No disponible." });
+    }
+
+    const code = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = new Date(Date.now() + RECOVERY_CODE_EXPIRATION);
+
+    const userEmail = decrypt(user.mail);
+
+    await req.db.collection("recovery_codes").updateMany(
+      { email: userEmail, active: true },
+      { $set: { active: false } }
+    );
+
+    await req.db.collection("recovery_codes").insertOne({
+      email: userEmail,
+      code,
+      userId: user._id.toString(),
+      createdAt: new Date(),
+      expiresAt,
+      active: true
+    });
+
+    await sendEmail({
+      to: userEmail,
+      subject: 'Recuperación de Contraseña',
+      html: `<h2>Tu código es: ${code}</h2>`
+    });
+
+    res.json({ success: true, message: "Enviado." });
+  } catch (err) {
+    console.error("Error en recuperación:", err);
+    res.status(500).json({ error: "Error interno" });
+  }
+});
+
+router.post("/borrarpass", async (req, res) => {
+  const { email, code } = req.body;
+  const now = new Date();
+
+  if (!email || !code) {
+    return res.status(400).json({ message: "Correo y código de verificación son obligatorios." });
+  }
+
+  try {
+    const recoveryRecord = await req.db.collection("recovery_codes").findOne({
+      email: email.toLowerCase().trim(),
+      code: code,
+      active: true
+    });
+
+    if (!recoveryRecord) {
+      return res.status(401).json({ message: "Código inválido o ya utilizado." });
+    }
+
+    if (recoveryRecord.expiresAt < now) {
+      await req.db.collection("recovery_codes").updateOne(
+        { _id: recoveryRecord._id },
+        { $set: { active: false, revokedAt: now, reason: "expired" } }
+      );
+      return res.status(401).json({ message: "Código expirado. Solicita uno nuevo." });
+    }
+
+    await req.db.collection("recovery_codes").updateOne(
+      { _id: recoveryRecord._id },
+      { $set: { active: false, revokedAt: now, reason: "consumed" } }
+    );
+
+    const userId = recoveryRecord.userId;
+
+    if (!userId) {
+      return res.status(404).json({ message: "Error interno: ID de usuario no encontrado." });
+    }
+
+    return res.json({ success: true, uid: userId });
+
+  } catch (err) {
+    console.error("Error en /borrarpass:", err);
+    res.status(500).json({ message: "Error interno al verificar el código." });
+  }
+});
+
+// SEND 2FA CODE - ACTIVACIÓN
+router.post("/send-2fa-code", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        message: "Email requerido."
+      });
+    }
+
+    const user = await req.db.collection("usuarios").findOne({
+      mail_index: createBlindIndex(email.toLowerCase().trim())
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "Usuario no encontrado."
+      });
+    }
+
+    await generateAndSend2FACode(req.db, user, '2FA_SETUP');
+
+    res.status(200).json({
+      success: true,
+      message: "Código de activación 2FA enviado a tu correo."
+    });
+  } catch (err) {
+    console.error("Error en /send-2fa-code:", err);
+    res.status(500).json({
+      success: false,
+      message: "Error interno al procesar la solicitud."
+    });
+  }
+});
+
+// VERIFICAR ACTIVACIÓN 2FA - VERSIÓN CORREGIDA
+router.post("/verify-2fa-activation", async (req, res) => {
+  const { email, verificationCode } = req.body;
+
+  console.log("DEBUG verify-2fa-activation - Body recibido:", req.body);
+
+  if (!email || !verificationCode || verificationCode.length !== 6) {
+    return res.status(400).json({
+      success: false,
+      message: "Datos incompletos o código inválido."
+    });
+  }
+
+  try {
+    // Buscar usuario por email (usando blind index)
+    const user = await req.db.collection("usuarios").findOne({
+      mail_index: createBlindIndex(email.toLowerCase().trim())
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Usuario no encontrado."
+      });
+    }
+
+    const userId = user._id.toString();
+
+    // Buscar código 2FA activo
+    const codeRecord = await req.db.collection("2fa_codes").findOne({
+      userId: userId,
+      code: verificationCode,
+      type: '2FA_SETUP',
+      active: true,
+      expiresAt: { $gt: new Date() }
+    });
+
+    if (!codeRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "Código incorrecto o expirado."
+      });
+    }
+
+    // Marcar código como usado
+    await req.db.collection("2fa_codes").updateOne(
+      { _id: codeRecord._id },
+      { $set: { active: false, usedAt: new Date() } }
+    );
+
+    // Actualizar estado 2FA del usuario
+    await req.db.collection("usuarios").updateOne(
+      { _id: new ObjectId(userId) },
+      { $set: { twoFactorEnabled: true } }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Autenticación de Dos Factores activada exitosamente."
+    });
+  } catch (err) {
+    console.error("Error en /verify-2fa-activation:", err);
+    res.status(500).json({
+      success: false,
+      message: "Error interno en la verificación."
+    });
+  }
+});
+
+// DESACTIVAR 2FA - VERSIÓN CORREGIDA
+router.post("/disable-2fa", async (req, res) => {
+  const { email } = req.body;
+
+  console.log("DEBUG disable-2fa - Body recibido:", req.body);
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: "Email es requerido."
+    });
+  }
+
+  try {
+    // Buscar usuario por email (usando blind index)
+    const user = await req.db.collection("usuarios").findOne({
+      mail_index: createBlindIndex(email.toLowerCase().trim())
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Usuario no encontrado."
+      });
+    }
+
+    if (!user.twoFactorEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: "El 2FA no está activado para este usuario."
+      });
+    }
+
+    const userId = user._id.toString();
+
+    // Actualizar estado
+    await req.db.collection("usuarios").updateOne(
+      { _id: new ObjectId(userId) },
+      { $set: { twoFactorEnabled: false } }
+    );
+
+    // Invalidar códigos 2FA activos
+    await req.db.collection("2fa_codes").updateMany(
+      { userId: userId, active: true },
+      { $set: { active: false, revokedAt: new Date(), reason: "2fa_disabled" } }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Autenticación de Dos Factores desactivada exitosamente."
+    });
+  } catch (err) {
+    console.error("Error en /disable-2fa:", err);
+    res.status(500).json({
+      success: false,
+      message: "Error interno al desactivar 2FA."
+    });
+  }
+});
+
+router.get("/logins/todos", async (req, res) => {
+  try {
+    const tkn = await req.db.collection("ingresos").find().toArray();
+    res.json(tkn);
+  } catch (err) {
+    res.status(500).json({ error: "Error al obtener ingresos" });
+  }
+});
 
 // VALIDATE - Consulta token desde DB
 router.post("/validate", async (req, res) => {
@@ -195,7 +748,6 @@ router.post("/validate", async (req, res) => {
   }
 });
 
-
 // LOGOUT - Elimina o desactiva token en DB
 router.post("/logout", async (req, res) => {
   const { token } = req.body;
@@ -212,7 +764,6 @@ router.post("/logout", async (req, res) => {
     res.status(500).json({ success: false, message: "Error interno al cerrar sesión" });
   }
 });
-
 
 router.post("/register", async (req, res) => {
   try {
@@ -255,7 +806,6 @@ router.post("/register", async (req, res) => {
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
-
 
 // PUT - Actualizar usuario
 router.put("/users/:id", async (req, res) => {
@@ -303,7 +853,6 @@ router.put("/users/:id", async (req, res) => {
     res.status(500).json({ error: "Error interno del servidor al actualizar" });
   }
 });
-
 
 // DELETE - Eliminar usuario
 router.delete("/users/:id", async (req, res) => {
