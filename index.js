@@ -358,6 +358,7 @@ app.use("/api/tareas", tareas);
 app.use("/api/departments", departments);
 app.use("/api/mail", mailRoutes);
 app.use("/api/noti", noti);
+app.use("/api/notificaciones", noti);
 // Proxy para llamadas a APIs internas desde el backend público
 app.use('/internal-proxy', internalProxy);
 

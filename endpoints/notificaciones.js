@@ -275,26 +275,10 @@ router.get('/quick/:userId', async (req, res) => {
       usuario = rows && rows[0];
     }
 
-    // 2) Intento por mail o id corto; si parece email, primero intentar por blind index
+    // 2) Intento por mail o id corto
     if (!usuario) {
-      if (userId && userId.includes('@')) {
-        try {
-          usuario = await users.findOne(
-            { mail_index: createBlindIndex(userId.toLowerCase().trim()) },
-            { projection: { notificaciones: 1, mail: 1, id: 1, departamento: 1 } }
-          );
-        } catch (e) {
-          usuario = null;
-        }
-      }
-      if (!usuario) {
-        const rows = await users.find({ $or: [{ mail: userId }, { id: userId }, { nombre: userId }] })
-          .project({ notificaciones: 1, mail: 1, id: 1, departamento: 1 })
-          .maxTimeMS(2000)
-          .limit(1)
-          .toArray();
-        usuario = rows && rows[0];
-      }
+      const rows = await users.find({ $or: [{ mail: userId }, { id: userId }, { nombre: userId }] }).project({ notificaciones: 1, mail: 1, id: 1, departamento: 1 }).maxTimeMS(2000).limit(1).toArray();
+      usuario = rows && rows[0];
     }
 
     if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado (quick)' });
@@ -534,18 +518,9 @@ router.get('/:userId/unread-count', async (req, res) => {
       }
     }
 
-    // Si no resultó, intentar por mail / id / nombre; si parece email, probar blind index primero
+    // Si no resultó, intentar por mail / id / nombre
     if (!usuario) {
-      if (userId && userId.includes('@')) {
-        try {
-          usuario = await users.findOne({ mail_index: createBlindIndex(userId.toLowerCase().trim()) }, { projection: { notificaciones: 1 } });
-        } catch (e) {
-          usuario = null;
-        }
-      }
-      if (!usuario) {
-        usuario = await users.findOne({ $or: [{ mail: userId }, { id: userId }, { nombre: userId }] }, { projection: { notificaciones: 1 } });
-      }
+      usuario = await users.findOne({ $or: [{ mail: userId }, { id: userId }, { nombre: userId }] }, { projection: { notificaciones: 1 } });
     }
 
     if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
