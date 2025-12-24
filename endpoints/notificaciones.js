@@ -55,10 +55,17 @@ router.get('/user/:userId', async (req, res) => {
     if (ObjectId.isValid(userId)) {
       usuario = await collection.findOne({ _id: new ObjectId(userId) });
     } else if (userId.includes('@')) {
-      // Búsqueda por correo usando Blind Index
-      usuario = await collection.findOne({ 
-        mail_index: createBlindIndex(userId.toLowerCase().trim()) 
-      });
+      // Búsqueda por correo usando Blind Index (si está disponible)
+      try {
+        if (typeof createBlindIndex === 'function') {
+          usuario = await collection.findOne({ mail_index: createBlindIndex(userId.toLowerCase().trim()) });
+        } else {
+          usuario = null;
+        }
+      } catch (e) {
+        console.error('notificaciones.user: mail_index lookup failed:', e && e.message);
+        usuario = null;
+      }
     }
 
     if (!usuario) {
@@ -69,7 +76,15 @@ router.get('/user/:userId', async (req, res) => {
     if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     // --- PREPARACIÓN DE DATOS DESENCRIPTADOS PARA LÓGICA DINÁMICA ---
-    const userEmailDesc = decrypt(usuario.mail);
+    let userEmailDesc = usuario.mail;
+    try {
+      if (typeof decrypt === 'function') {
+        userEmailDesc = decrypt(usuario.mail);
+      }
+    } catch (e) {
+      console.error('notificaciones.user: decrypt failed:', e && e.message);
+      userEmailDesc = usuario.mail;
+    }
     const userDeptName = usuario.departamento || usuario.empresa || null;
     const now = new Date();
     const upcomingDays = parseInt(req.query.upcomingDays || '3', 10);
@@ -484,7 +499,16 @@ router.get('/:userId/unread-count', async (req, res) => {
     if (ObjectId.isValid(userId)) {
       usuario = await collection.findOne({ _id: new ObjectId(userId) });
     } else if (userId.includes('@')) {
-      usuario = await collection.findOne({ mail_index: createBlindIndex(userId.toLowerCase().trim()) });
+      try {
+        if (typeof createBlindIndex === 'function') {
+          usuario = await collection.findOne({ mail_index: createBlindIndex(userId.toLowerCase().trim()) });
+        } else {
+          usuario = null;
+        }
+      } catch (e) {
+        console.error('notificaciones.unread-count: mail_index lookup failed:', e && e.message);
+        usuario = null;
+      }
     } else {
       usuario = await collection.findOne({ id: userId });
     }
