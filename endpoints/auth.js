@@ -49,65 +49,6 @@ router.get("/:mail", async (req, res) => {
   }
 });
 
-router.post("/login", async (req, res, next) => {
-  try {
-    const { email, password } = req.body;
-
-    // Verificar que req.db existe
-    if (!req.db) {
-      console.error("Database connection not available");
-      return res.status(500).json({ error: "Error con base de datos - conexión no disponible" });
-    }
-
-    const user = await req.db.collection("usuarios").findOne({ mail: email });
-    if (!user) return res.status(401).json({ success: false, message: "Credenciales inválidas" });
-
-    if (user.estado === "pendiente")
-      return res.status(401).json({
-        success: false,
-        message: "Usuario pendiente de activación. Revisa tu correo para establecer tu contraseña."
-      });
-
-    if (user.estado === "inactivo")
-      return res.status(401).json({
-        success: false,
-        message: "Usuario inactivo. Contacta al administrador."
-      });
-
-    if (user.pass !== password)
-      return res.status(401).json({ success: false, message: "Credenciales inválidas" });
-
-    // Crear token
-    const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + TOKEN_EXPIRATION);
-    const usr = { name: user.nombre, email, cargo: user.rol };
-
-    // Guarda token en la colección 'tokens'
-    await req.db.collection("tokens").insertOne({
-      token,
-      email,
-      rol: user.rol,
-      createdAt: new Date(),
-      expiresAt,
-      active: true
-    });
-
-    return res.json({ success: true, token, usr });
-  } catch (err) {
-    console.error('Auth error:', err && err.stack ? err.stack : err);
-    const status = (err && err.status) ? err.status : 500;
-    if (process.env.LOG_LEVEL === 'debug') {
-      return res.status(status).json({
-        error: err.message || 'Error interno de autenticación',
-        details: err && err.stack ? String(err.stack).split('\n').slice(0,10).join('\n') : undefined
-      });
-    }
-    return res.status(status).json({ error: 'Error al autenticar, revisar logs del servidor' });
-  }
-});
-
-
-
 router.get("/full/:mail", async (req, res) => {
   try {
     const userMail = req.params.mail;
