@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { ObjectId } = require('mongodb'); // Asumiendo que MongoDB está en req.db
+const { encrypt, decrypt } = require("../utils/seguridad.helper");
 
 // Nombre de la colección donde guardarás los flujos
 const WORKFLOW_COLLECTION = "flujos"; 
