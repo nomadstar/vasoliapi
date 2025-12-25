@@ -225,30 +225,50 @@ router.get('/', async (req, res) => {
         if (req.query.status) filter.status = req.query.status;
 
         const collection = req.db.collection(WORKFLOW_COLLECTION);
+        
+        // --- REPLICACIÓN EXACTA DE LA LÓGICA DE BÚSQUEDA ORIGINAL ---
         let query;
-
         if (lastId && ObjectId.isValid(lastId)) {
-            query = collection.find({ ...filter, _id: { $gt: new ObjectId(lastId) } }).sort({ _id: 1 });
+            // Se debe mantener el ordenamiento consistente (ej: sort _id: 1)
+            query = collection.find({ ...filter, _id: { $gt: new ObjectId(lastId) } })
+                              .sort({ _id: 1 })
+                              .limit(pageSize + 1);
         } else {
-            query = collection.find(filter).sort({ createdAt: -1 });
+            // Primera carga: orden descendente por creación
+            query = collection.find(filter)
+                              .sort({ createdAt: -1 })
+                              .limit(pageSize + 1);
         }
 
-        // Proyectamos campos (asegúrate de traer los campos cifrados para poder descifrarlos)
-        const projection = { name: 1, owner: 1, isPublished: 1, status: 1, createdAt: 1, updatedAt: 1, summary: 1, gestion: 1, empresa: 1 };
-        const docs = await query.project(projection).limit(pageSize + 1).toArray();
+        // Proyección de campos necesarios para el listado (incluyendo los que se descifran)
+        const projection = { 
+            name: 1, owner: 1, isPublished: 1, status: 1, 
+            createdAt: 1, updatedAt: 1, summary: 1, 
+            gestion: 1, empresa: 1 
+        };
+        
+        const docs = await query.project(projection).toArray();
 
+        // --- MANEJO DE HAS_MORE Y POP (Lógica de parada) ---
         const hasMore = docs.length > pageSize;
-        if (hasMore) docs.pop();
+        if (hasMore) {
+            docs.pop(); // Elimina el registro N+1 usado para detectar más datos
+        }
 
-        // Descifrar cada item de la lista
+        // Descifrar solo los documentos resultantes después del pop
         const decryptedItems = docs.map(item => processWorkflow(item, 'decrypt'));
+        
+        // Obtener el cursor del último elemento real (ya descifrado)
         const nextCursor = decryptedItems.length ? decryptedItems[decryptedItems.length - 1]._id : null;
 
-        res.json({ items: decryptedItems, hasMore, nextCursor });
+        res.json({ 
+            items: decryptedItems, 
+            hasMore, 
+            nextCursor 
+        });
     } catch (err) {
         console.error('Error al listar flujos:', err);
         res.status(500).json({ error: 'Error al obtener la lista de flujos' });
     }
 });
-
 module.exports = router;
