@@ -7,7 +7,34 @@ const XLSX = require('xlsx');
 const multer = require('multer');
 
 const router = express.Router();
+ 
+// Diagnostic / debug flag: set DRIVE_DEBUG=1 or DRIVE_DEBUG=true to enable
+const DRIVE_DEBUG = process.env.DRIVE_DEBUG === '1' || process.env.DRIVE_DEBUG === 'true';
 
+function maskToken(t) {
+  try {
+    if (!t) return null;
+    const s = String(t);
+    if (s.length <= 12) return `${s.slice(0,3)}...${s.slice(-3)}`;
+    return `${s.slice(0,6)}...${s.slice(-6)}`;
+  } catch (e) { return '***'; }
+}
+
+function debugLog(...args) {
+  if (DRIVE_DEBUG) console.log('[drive-debug]', ...args);
+}
+
+function logError(err, req, note) {
+  try {
+    const ctx = req ? { method: req.method, url: req.originalUrl || req.url, host: req.headers && req.headers.host } : {};
+    console.error('[drive-error]', note || '', ctx, err && err.message ? err.message : err);
+    if (DRIVE_DEBUG && err && err.response && err.response.data) {
+      try { console.error('[drive-error] response.data:', JSON.stringify(err.response.data)); } catch (e) { console.error('[drive-error] response.data (raw):', err.response.data); }
+    }
+  } catch (e) {
+    console.error('logError failed', e);
+  }
+}
 const TOKEN_PATH = path.join(__dirname, '..', 'data', 'google_tokens.json');
 
 // Scopes usados para el consentimiento de Google (subir/gestionar archivos)
@@ -42,6 +69,11 @@ function loadSavedTokens() {
       // support two shapes: either the tokens object is saved directly
       // or a wrapper was saved like { ok: true, message: '', tokens: { ... } }
       if (parsed && parsed.tokens) return parsed.tokens;
+      // debug: show if tokens file exists and a little info
+      if (DRIVE_DEBUG) {
+        const sample = parsed && parsed.access_token ? { access_token: maskToken(parsed.access_token), expiry_date: parsed.expiry_date } : {};
+        debugLog('Loaded tokens file', TOKEN_PATH, sample);
+      }
       return parsed;
     }
   } catch (e) {
@@ -70,7 +102,9 @@ function saveTokens(tokens) {
 function getOAuth2Client(redirectUri) {
   const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI } = process.env;
   if (!CLIENT_ID || !CLIENT_SECRET) {
-    throw new Error('Faltan variables de entorno CLIENT_ID y/o CLIENT_SECRET para Google Drive');
+    const err = new Error('Faltan variables de entorno CLIENT_ID y/o CLIENT_SECRET para Google Drive');
+    debugLog('Missing CLIENT_ID or CLIENT_SECRET', { CLIENT_ID: !!CLIENT_ID, CLIENT_SECRET: !!CLIENT_SECRET });
+    throw err;
   }
   const uri = redirectUri || REDIRECT_URI;
   return new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, uri);
@@ -117,6 +151,7 @@ function isInsufficientPermissionError(err) {
 // Step 1: iniciar autorización (redirige al consentimiento de Google)
 router.get('/auth', (req, res) => {
   try {
+    debugLog('Incoming /auth request', { host: req.headers.host, redirect: resolveRedirectUri(req) });
     const oauth2Client = getOAuth2Client(resolveRedirectUri(req));
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
@@ -132,6 +167,7 @@ router.get('/auth', (req, res) => {
 // Step 2: callback donde Google redirige con el código
 router.get('/oauth2callback', async (req, res) => {
   try {
+    debugLog('Incoming /oauth2callback', { query: req.query });
     const oauth2Client = getOAuth2Client(resolveRedirectUri(req));
     const { code } = req.query;
     const { tokens } = await oauth2Client.getToken(code);
@@ -140,7 +176,7 @@ router.get('/oauth2callback', async (req, res) => {
     console.log('Tokens guardados en:', TOKEN_PATH);
     res.json({ ok: true, message: 'Tokens guardados', tokens });
   } catch (err) {
-    console.error('OAuth callback error:', err.message || err);
+    logError(err, req, 'OAuth callback error');
     res.status(500).json({ ok: false, message: 'OAuth callback error', error: err.message || String(err) });
   }
 });
@@ -150,6 +186,10 @@ async function ensureAuthClient() {
   const saved = loadSavedTokens();
   if (!saved) throw new Error('No hay tokens guardados. Visita /api/drive/auth para autorizar.');
   oauth2Client.setCredentials(saved);
+  // debug: show token presence without leaking whole token
+  if (DRIVE_DEBUG) {
+    debugLog('ensureAuthClient: tokens present', { has_access_token: !!saved.access_token, has_refresh_token: !!saved.refresh_token, expiry_date: saved.expiry_date });
+  }
   // refresh token if needed
   return oauth2Client;
 }
