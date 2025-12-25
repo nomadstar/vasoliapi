@@ -899,6 +899,69 @@ router.post("/set-password", async (req, res) => {
   }
 });
 
+router.post("/change-password", async (req, res) => {
+  const { email, currentPassword, newPassword } = req.body;
+
+  if (!email || !currentPassword || !newPassword) {
+    return res.status(400).json({ success: false, message: "Faltan datos requeridos" });
+  }
+
+  try {
+    const user = await req.db.collection("usuarios").findOne({
+      mail_index: createBlindIndex(email.toLowerCase().trim())
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Usuario no encontrado" });
+    }
+
+    if (!(await verifyPassword(user.pass, currentPassword))) {
+      return res.status(401).json({ success: false, message: "La contraseña actual es incorrecta" });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ success: false, message: "La nueva contraseña debe tener al menos 8 caracteres" });
+    }
+
+    const hashPassword = require("../utils/seguridad.helper").hashPassword;
+    const hashedNewPassword = await hashPassword(newPassword);
+
+    if (await verifyPassword(user.pass, newPassword)) {
+      return res.status(400).json({ success: false, message: "La nueva contraseña no puede ser igual a la actual" });
+    }
+
+    const result = await req.db.collection("usuarios").updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          pass: hashedNewPassword,
+          updatedAt: new Date().toISOString()
+        }
+      }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(500).json({ success: false, message: "No se pudo actualizar la contraseña" });
+    }
+
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    await addNotification(req.db, {
+      userId: user._id.toString(),
+      titulo: `Cambio de Contraseña`,
+      descripcion: `La contraseña fue actualizada exitosamente el ${new Date().toLocaleString()}. IP: ${ipAddress}`,
+      prioridad: 2,
+      color: "#ffae00",
+      icono: "Shield",
+    });
+
+    res.json({ success: true, message: "Contraseña actualizada exitosamente" });
+
+  } catch (err) {
+    console.error("Error cambiando contraseña:", err);
+    res.status(500).json({ success: false, message: "Error interno del servidor" });
+  }
+});
+
 // EMPRESAS ENDPOINTS
 
 // GET - Obtener todas las empresas
