@@ -1,63 +1,95 @@
 const express = require('express');
 const router = express.Router();
 const { ObjectId } = require('mongodb'); // Asumiendo que MongoDB está en req.db
+const { encrypt, decrypt } = require("../utils/seguridad.helper");
 
 // Nombre de la colección donde guardarás los flujos
 const WORKFLOW_COLLECTION = "flujos"; 
 
-// Middleware para asegurar que hay conexión a la BD antes de procesar rutas
-function ensureDb(req, res, next) {
-    if (!req.db) {
-        return res.status(503).json({ error: 'Servicio no disponible: no hay conexión a la base de datos (MONGO_URI no configurado).' });
+const encryptNode = (node) => ({
+    ...node,
+    title: node.title ? encrypt(node.title) : node.title,
+    description: node.description ? encrypt(node.description) : node.description,
+    type: node.type ? encrypt(node.type) : node.type,
+    priority: node.priority ? encrypt(node.priority) : node.priority,
+    assignedTo: node.assignedTo ? encrypt(node.assignedTo) : node.assignedTo,
+});
+
+const decryptNode = (node) => ({
+    ...node,
+    title: node.title ? decrypt(node.title) : node.title,
+    description: node.description ? decrypt(node.description) : node.description,
+    type: node.type ? decrypt(node.type) : node.type,
+    priority: node.priority ? decrypt(node.priority) : node.priority,
+    assignedTo: node.assignedTo ? decrypt(node.assignedTo) : node.assignedTo,
+});
+
+const encryptWorkflow = (wf) => {
+    const encrypted = { ...wf };
+    if (encrypted.name) encrypted.name = encrypt(encrypted.name);
+    if (encrypted.status) encrypted.status = encrypt(encrypted.status);
+    if (encrypted.gestion) encrypted.gestion = encrypt(encrypted.gestion);
+    if (encrypted.empresa) encrypted.empresa = encrypt(encrypted.empresa);
+    if (encrypted.nodes && Array.isArray(encrypted.nodes)) {
+        encrypted.nodes = encrypted.nodes.map(encryptNode);
     }
+    return encrypted;
+};
+
+const decryptWorkflow = (wf) => {
+    if (!wf) return wf;
+    const decrypted = { ...wf };
+    if (decrypted.name) decrypted.name = decrypt(decrypted.name);
+    if (decrypted.status) decrypted.status = decrypt(decrypted.status);
+    if (decrypted.gestion) decrypted.gestion = decrypt(decrypted.gestion);
+    if (decrypted.empresa) decrypted.empresa = decrypt(decrypted.empresa);
+    if (decrypted.nodes && Array.isArray(decrypted.nodes)) {
+        decrypted.nodes = decrypted.nodes.map(decryptNode);
+    }
+    return decrypted;
+};
+
+// --- MIDDLEWARE ---
+function ensureDb(req, res, next) {
+    if (!req.db) return res.status(503).json({ error: 'Servicio no disponible' });
     next();
 }
-
 router.use(ensureDb);
+
 
 // --- 1. POST: Crear Nuevo Flujo (Solo Creación) ---
 // URL: POST /api/workflows
 router.post('/', async (req, res) => {
     try {
         const data = req.body;
-        const { name, nodes, connections, isPublished } = data;
-
-        // Si envían un id o _id -> hacer upsert (crear si no existe, actualizar si existe)
+        const encryptedData = encryptWorkflow(data);
         const providedId = data._id || data.id;
+
         if (providedId) {
             const filter = ObjectId.isValid(providedId) ? { _id: new ObjectId(providedId) } : { _id: providedId };
+            delete encryptedData._id;
+            delete encryptedData.id;
 
-            // Evitar que el cuerpo reemplace el _id
-            const toSet = { name, nodes, connections, isPublished: isPublished || false, updatedAt: new Date() };
-
-            const result = await req.db.collection(WORKFLOW_COLLECTION).updateOne(
+            await req.db.collection(WORKFLOW_COLLECTION).updateOne(
                 filter,
-                { $set: toSet, $setOnInsert: { createdAt: new Date() } },
+                { $set: { ...encryptedData, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
                 { upsert: true }
             );
 
-            // Obtener documento final
             const finalDoc = await req.db.collection(WORKFLOW_COLLECTION).findOne(filter);
-            const statusCode = result.upsertedCount ? 201 : 200;
-            return res.status(statusCode).json({ success: true, upserted: !!result.upsertedId, workflow: finalDoc });
+            return res.status(200).json(decryptWorkflow(finalDoc));
         }
 
-        // Si no envían id -> comportamiento clásico de creación
         const result = await req.db.collection(WORKFLOW_COLLECTION).insertOne({
-            name,
-            nodes,
-            connections,
-            isPublished: isPublished || false,
+            ...encryptedData,
             createdAt: new Date(),
             updatedAt: new Date(),
         });
 
         const newWorkflow = await req.db.collection(WORKFLOW_COLLECTION).findOne({ _id: result.insertedId });
-        return res.status(201).json(newWorkflow);
-
+        return res.status(201).json(decryptWorkflow(newWorkflow));
     } catch (error) {
-        console.error("Error al crear el flujo:", error);
-        res.status(500).json({ message: "Error al crear el flujo", error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -67,41 +99,21 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const workflowId = req.params.id;
-        const updates = req.body; 
+        if (!ObjectId.isValid(workflowId)) return res.status(400).json({ error: "ID no válido" });
 
-        if (!ObjectId.isValid(workflowId)) {
-            return res.status(400).json({ error: "ID de flujo no válido." });
-        }
-        
-        // Evitar que valores numéricos (ej: counts) reemplacen los arrays reales
-        if (updates.hasOwnProperty('nodes') && typeof updates.nodes !== 'object') {
-            delete updates.nodes;
-        }
-        if (updates.hasOwnProperty('connections') && typeof updates.connections !== 'object') {
-            delete updates.connections;
-        }
-
-        // El frontend envía el ID en la URL y los datos actualizados en el cuerpo.
-        delete updates.id; 
-        delete updates._id;
+        const encryptedUpdates = encryptWorkflow(req.body);
+        delete encryptedUpdates._id;
+        delete encryptedUpdates.id;
 
         const result = await req.db.collection(WORKFLOW_COLLECTION).findOneAndUpdate(
             { _id: new ObjectId(workflowId) },
-            { $set: { 
-                ...updates, 
-                updatedAt: new Date()
-            } },
-            { returnDocument: "after" } 
+            { $set: { ...encryptedUpdates, updatedAt: new Date() } },
+            { returnDocument: "after" }
         );
-        
-        if (!result || !result.value) {
-            return res.status(404).json({ message: "Flujo de trabajo no encontrado para actualizar." });
-        }
 
-        res.status(200).json(result.value);
+        res.status(200).json(decryptWorkflow(result.value));
     } catch (error) {
-        console.error("Error al actualizar el flujo:", error);
-        res.status(500).json({ message: "Error al actualizar el flujo", error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -112,13 +124,18 @@ router.patch('/:id/nodes', async (req, res) => {
     try {
         const workflowId = req.params.id;
         const { nodeId, fields } = req.body;
+        if (!ObjectId.isValid(workflowId)) return res.status(400).json({ error: "ID no válido" });
 
-        if (!ObjectId.isValid(workflowId)) return res.status(400).json({ error: "ID de flujo no válido." });
-        if (!nodeId || !fields || typeof fields !== 'object') return res.status(400).json({ error: "nodeId y fields son requeridos." });
+        // Cifrar campos del nodo si corresponden a los campos sensibles definidos
+        const fieldsToEncrypt = ['title', 'description', 'type', 'priority', 'assignedTo'];
+        const encryptedFields = { ...fields };
+        
+        fieldsToEncrypt.forEach(f => {
+            if (encryptedFields[f]) encryptedFields[f] = encrypt(encryptedFields[f]);
+        });
 
-        // Construir $set dinámico para arrayFilters
         const setObj = {};
-        for (const [k, v] of Object.entries(fields)) {
+        for (const [k, v] of Object.entries(encryptedFields)) {
             setObj[`nodes.$[node].${k}`] = v;
         }
         setObj['updatedAt'] = new Date();
@@ -126,17 +143,12 @@ router.patch('/:id/nodes', async (req, res) => {
         const result = await req.db.collection(WORKFLOW_COLLECTION).findOneAndUpdate(
             { _id: new ObjectId(workflowId) },
             { $set: setObj },
-            {
-                arrayFilters: [{ "node.id": nodeId }],
-                returnDocument: "after"
-            }
+            { arrayFilters: [{ "node.id": nodeId }], returnDocument: "after" }
         );
 
-        if (!result || !result.value) return res.status(404).json({ error: "Workflow o nodo no encontrado." });
-        return res.json({ ok: true, workflow: result.value });
+        return res.json({ ok: true, workflow: decryptWorkflow(result.value) });
     } catch (err) {
-        console.error("Error patch node:", err);
-        res.status(500).json({ error: "Error interno al actualizar nodo" });
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -145,23 +157,14 @@ router.patch('/:id/nodes', async (req, res) => {
 router.get('/:id', async (req, res) => {
     try {
         const workflowId = req.params.id;
-        
-        if (!ObjectId.isValid(workflowId)) {
-            return res.status(400).json({ error: "ID de flujo no válido." });
-        }
+        if (!ObjectId.isValid(workflowId)) return res.status(400).json({ error: "ID no válido" });
 
-        const workflow = await req.db
-            .collection(WORKFLOW_COLLECTION)
-            .findOne({ _id: new ObjectId(workflowId) });
+        const workflow = await req.db.collection(WORKFLOW_COLLECTION).findOne({ _id: new ObjectId(workflowId) });
+        if (!workflow) return res.status(404).json({ message: "No encontrado" });
 
-        if (!workflow) {
-            return res.status(404).json({ message: "Flujo de trabajo no encontrado." });
-        }
-
-        res.status(200).json(workflow);
+        res.status(200).json(decryptWorkflow(workflow));
     } catch (error) {
-        console.error("Error al obtener el flujo:", error);
-        res.status(500).json({ message: "Error al obtener el flujo", error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -171,24 +174,14 @@ router.get('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
     try {
         const workflowId = req.params.id;
+        if (!ObjectId.isValid(workflowId)) return res.status(400).json({ error: "ID no válido" });
         
-        if (!ObjectId.isValid(workflowId)) {
-            return res.status(400).json({ error: "ID de flujo no válido." });
-        }
-        
-        // LÓGICA DB: Elimina el flujo por ID
-        const result = await req.db
-            .collection(WORKFLOW_COLLECTION)
-            .deleteOne({ _id: new ObjectId(workflowId) });
+        const result = await req.db.collection(WORKFLOW_COLLECTION).deleteOne({ _id: new ObjectId(workflowId) });
+        if (result.deletedCount === 0) return res.status(404).json({ message: "No encontrado" });
 
-        if (result.deletedCount === 0) {
-             return res.status(404).json({ message: "Flujo de trabajo no encontrado." });
-        }
-
-        res.status(200).json({ message: "Flujo eliminado exitosamente", id: workflowId });
+        res.status(200).json({ message: "Eliminado exitosamente", id: workflowId });
     } catch (error) {
-        console.error("Error al eliminar el flujo:", error);
-        res.status(500).json({ message: "Error al eliminar el flujo", error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -198,48 +191,96 @@ router.delete('/:id', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const pageSize = Math.min(100, parseInt(req.query.pageSize, 10) || 20);
-        const lastId = req.query.lastId; // cursor: ObjectId string
-
+        const lastId = req.query.lastId;
         const filter = {};
-        // Opcional: permitir filtrar por propietario/status/q si se necesita
-        if (req.query.owner) filter.owner = req.query.owner;
-        if (req.query.status) filter.status = req.query.status;
 
-        const collection = req.db.collection(WORKFLOW_COLLECTION);
+        let query = req.db.collection(WORKFLOW_COLLECTION).find(filter);
 
-        let query = collection.find(filter);
-
-        // Cursor-based cuando nos pasan lastId
-        if (lastId) {
-            if (!ObjectId.isValid(lastId)) return res.status(400).json({ error: 'lastId inválido' });
-            query = collection.find({ ...filter, _id: { $gt: new ObjectId(lastId) } }).sort({ _id: 1 }).limit(pageSize + 1);
-        } else if (req.query.page) {
-            // Fallback a paginación por página (skip) si se solicita
-            const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-            const skip = (page - 1) * pageSize;
-            query = collection.find(filter).sort({ createdAt: -1 }).skip(skip).limit(pageSize + 1);
+        if (lastId && ObjectId.isValid(lastId)) {
+            query = req.db.collection(WORKFLOW_COLLECTION).find({ ...filter, _id: { $gt: new ObjectId(lastId) } }).sort({ _id: 1 });
         } else {
-            // Sin cursor ni page: devolver primera página ordenada por createdAt desc
-            query = collection.find(filter).sort({ createdAt: -1 }).limit(pageSize + 1);
+            query = query.sort({ createdAt: -1 });
         }
 
-        // Proyección: evitar traer campos pesados como `nodes` o `connections` en el listado
-        const projection = { name: 1, owner: 1, isPublished: 1, status: 1, createdAt: 1, updatedAt: 1, summary: 1 };
-        query = query.project(projection);
-
-        const docs = await query.toArray();
+        // Proyectamos campos para el listado (incluyendo los cifrados para poder descifrarlos)
+        const docs = await query.limit(pageSize + 1).project({
+            name: 1, status: 1, gestion: 1, empresa: 1, isPublished: 1, createdAt: 1, updatedAt: 1
+        }).toArray();
 
         const hasMore = docs.length > pageSize;
         if (hasMore) docs.pop();
-        const nextCursor = docs.length ? docs[docs.length - 1]._id : null;
 
-        res.json({ items: docs, hasMore, nextCursor });
+        // Descifrar resultados del listado (estos no suelen traer 'nodes' por la proyección)
+        const decryptedDocs = docs.map(decryptWorkflow);
+
+        res.json({ items: decryptedDocs, hasMore, nextCursor: docs.length ? docs[docs.length - 1]._id : null });
     } catch (err) {
-        console.error('Error al listar flujos:', err);
-        res.status(500).json({ error: 'Error al obtener la lista de flujos' });
+        res.status(500).json({ error: err.message });
     }
 });
 
+// 6. ENDPOINT DE MIGRACIÓN: CIFRAR FLUJOS EXISTENTES ---
+// URL: PATCH /api/workflows/system/migrate-encryption
+router.patch('/system/migrate-encryption', async (req, res) => {
+    try {
+        const collection = req.db.collection(WORKFLOW_COLLECTION);
+        
+        // 1. Obtener todos los flujos de la colección
+        const workflows = await collection.find({}).toArray();
+        
+        if (workflows.length === 0) {
+            return res.status(404).json({ message: "No se encontraron flujos para migrar." });
+        }
 
+        let actualizados = 0;
+        let errores = 0;
+
+        // 2. Procesar cada flujo uno por uno
+        const operaciones = workflows.map(async (wf) => {
+            try {
+                // Verificamos si ya parece estar cifrado (opcional, para evitar doble cifrado)
+                // Si el nombre contiene el separador ":", asumimos que ya está procesado
+                if (wf.name && wf.name.includes(':')) {
+                    return; 
+                }
+
+                const encryptedWf = encryptWorkflow(wf);
+                
+                // Actualizamos el documento en la base de datos
+                await collection.updateOne(
+                    { _id: wf._id },
+                    { 
+                        $set: { 
+                            ...encryptedWf,
+                            updatedAt: new Date(),
+                            migrationLog: "Encrypted on " + new Date().toISOString()
+                        } 
+                    }
+                );
+                actualizados++;
+            } catch (err) {
+                console.error(`Error cifrando flujo ${wf._id}:`, err);
+                errores++;
+            }
+        });
+
+        await Promise.all(operaciones);
+
+        res.json({
+            success: true,
+            message: "Proceso de migración de cifrado completado.",
+            total_procesados: workflows.length,
+            actualizados_exitosamente: actualizados,
+            errores: errores
+        });
+
+    } catch (error) {
+        console.error("Error crítico en la migración:", error);
+        res.status(500).json({ 
+            error: "Error interno durante la migración de datos", 
+            details: error.message 
+        });
+    }
+});
 
 module.exports = router;
