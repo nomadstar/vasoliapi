@@ -6,6 +6,7 @@ const multer = require('multer');
 const { validarToken } = require('../utils/validarToken');
 const useragent = require('useragent');
 const { hashPassword, encrypt, createBlindIndex, verifyPassword, decrypt } = require("../utils/seguridad.helper");
+const { addNotification } = require("../utils/notificaciones.helper");
 
 let activeTokens = [];
 const TOKEN_EXPIRATION = 1000 * 60 * 60;
