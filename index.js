@@ -138,6 +138,33 @@ if (process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development')
   }
 }
 
+// Imprimir guía para el frontend sobre qué variables públicas y headers necesita
+if (process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development') {
+  try {
+    console.info('FRONTEND HELP: variables y headers que el frontend debe usar (NO mostrar secretos)');
+    console.info('- Conexión API: usar la ruta base /api/ desde el mismo host o apuntar al host público donde corre esta API');
+    console.info("- Autenticación: enviar header 'Authorization: Bearer <token>' obtenido en POST /api/auth/login");
+    console.info("- Alternativa (endpoints concretos): algunos endpoints aceptan 'x-access-key' header o '?accessKey=' query param (p.ej. /api/mail, /api/analytics)");
+
+    console.info('- Variables públicas útiles para el frontend:');
+    console.info('  FRONTEND_URL:', process.env.FRONTEND_URL ? '[SET]' : '[NOT SET]');
+    console.info('  CORS_ALLOW_ALL:', process.env.CORS_ALLOW_ALL || 'false');
+    try {
+      const expandedForLog = Array.isArray(allowedOrigins) ? allowedOrigins.map(maskOriginForLog) : [maskOriginForLog(String(allowedOrigins))];
+      console.info('  CORS_ORIGINS (expanded):', expandedForLog.join(', '));
+    } catch (e) {
+      console.info('  CORS_ORIGINS (expanded): [error al formatear]');
+    }
+    console.info('  CLIENT_ID (Google OAuth):', process.env.CLIENT_ID ? '[SET]' : '[NOT SET]');
+    console.info('  REDIRECT_URI (Google OAuth redirect):', process.env.REDIRECT_URI ? '[SET]' : '[NOT SET]');
+
+    console.info('- NOTA: NO exponer en el frontend secretos como CLIENT_SECRET, JWT_SECRET, MASTER_KEY, SMTP_PASS.');
+    console.info('- Para debugging: si recibes 401 revisa Authorization header, CORS origin y si el token existe/expiró en la colección `tokens`.');
+  } catch (e) {
+    console.info('FRONTEND HELP (error al generar log)');
+  }
+}
+
 // Comprueba si un origin pertenece a la red local (IP privada, localhost, .local, .internal)
 function isLocalNetworkOrigin(origin) {
   if (!origin) return false;
