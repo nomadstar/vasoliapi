@@ -169,10 +169,10 @@ router.get('/oauth2callback', async (req, res) => {
   try {
     debugLog('Incoming /oauth2callback', { query: req.query, originalUrl: req.originalUrl });
     const oauthError = req.query?.error;
-    if (oauthError) return res.status(400).send(`OAuth error: ${oauthError}`);
+    if (oauthError) return res.status(400).json({ ok: false, error: 'OAuth error', detail: oauthError });
 
     const code = req.query?.code;
-    if (!code) return res.status(400).send('Missing OAuth code in callback');
+    if (!code) return res.status(400).json({ ok: false, error: 'Missing OAuth code in callback' });
 
     const oauth2Client = getOAuth2Client(resolveRedirectUri(req));
     const { tokens } = await oauth2Client.getToken(code);
