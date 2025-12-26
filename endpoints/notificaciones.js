@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const { ObjectId } = require("mongodb");
 const { addNotification } = require("../utils/notificaciones.helper");
+const { createBlindIndex, decrypt } = require("../utils/seguridad.helper");
 
 // Crear una notificación (para 1 usuario o filtro de usuarios)
 // Body esperado: { userId?, filtro?, titulo, descripcion, prioridad, color, icono, actionUrl }
@@ -55,16 +56,20 @@ router.get('/user/:userId', async (req, res) => {
     if (ObjectId.isValid(userId)) {
       usuario = await collection.findOne({ _id: new ObjectId(userId) });
     } else if (userId.includes('@')) {
-      // Búsqueda por correo usando Blind Index (si está disponible)
+      // Búsqueda por correo usando Blind Index
       try {
-        if (typeof createBlindIndex === 'function') {
-          usuario = await collection.findOne({ mail_index: createBlindIndex(userId.toLowerCase().trim()) });
-        } else {
-          usuario = null;
+        usuario = await collection.findOne({ mail_index: createBlindIndex(userId.toLowerCase().trim()) });
+        if (!usuario) {
+          usuario = await collection.findOne({ mail: userId });
         }
       } catch (e) {
         console.error('notificaciones.user: mail_index lookup failed:', e && e.message);
-        usuario = null;
+        try {
+          usuario = await collection.findOne({ mail: userId });
+        } catch (fallbackErr) {
+          console.error('notificaciones.user: mail fallback failed:', fallbackErr && fallbackErr.message);
+          usuario = null;
+        }
       }
     }
 
@@ -78,9 +83,7 @@ router.get('/user/:userId', async (req, res) => {
     // --- PREPARACIÓN DE DATOS DESENCRIPTADOS PARA LÓGICA DINÁMICA ---
     let userEmailDesc = usuario.mail;
     try {
-      if (typeof decrypt === 'function') {
-        userEmailDesc = decrypt(usuario.mail);
-      }
+      userEmailDesc = decrypt(usuario.mail);
     } catch (e) {
       console.error('notificaciones.user: decrypt failed:', e && e.message);
       userEmailDesc = usuario.mail;
@@ -292,6 +295,18 @@ router.get('/quick/:userId', async (req, res) => {
 
     // 2) Intento por mail o id corto
     if (!usuario) {
+      if (userId.includes('@')) {
+        try {
+          const mailIndex = createBlindIndex(userId.toLowerCase().trim());
+          const rows = await users.find({ mail_index: mailIndex }).project({ notificaciones: 1, mail: 1, id: 1, departamento: 1 }).maxTimeMS(2000).limit(1).toArray();
+          usuario = rows && rows[0];
+        } catch (e) {
+          console.error('notificaciones.quick: mail_index lookup failed:', e && e.message);
+        }
+      }
+    }
+
+    if (!usuario) {
       const rows = await users.find({ $or: [{ mail: userId }, { id: userId }, { nombre: userId }] }).project({ notificaciones: 1, mail: 1, id: 1, departamento: 1 }).maxTimeMS(2000).limit(1).toArray();
       usuario = rows && rows[0];
     }
@@ -474,7 +489,19 @@ router.delete('/user/:userId', async (req, res) => {
 router.put('/user/:userId/read-all', async (req, res) => {
   try {
     const { userId } = req.params;
-    let query = { _id: ObjectId.isValid(userId) ? new ObjectId(userId) : userId };
+    let query = null;
+    if (ObjectId.isValid(userId)) {
+      query = { _id: new ObjectId(userId) };
+    } else if (userId.includes('@')) {
+      try {
+        query = { mail_index: createBlindIndex(userId.toLowerCase().trim()) };
+      } catch (e) {
+        console.error('notificaciones.read-all: mail_index lookup failed:', e && e.message);
+        query = { mail: userId };
+      }
+    } else {
+      query = { id: userId };
+    }
 
     const result = await req.db.collection('usuarios').updateOne(
       query,
@@ -493,40 +520,6 @@ router.put('/user/:userId/read-all', async (req, res) => {
 router.get('/:userId/unread-count', async (req, res) => {
   try {
     const { userId } = req.params;
-    const collection = req.db.collection('usuarios');
-    let usuario = null;
-
-    if (ObjectId.isValid(userId)) {
-      usuario = await collection.findOne({ _id: new ObjectId(userId) });
-    } else if (userId.includes('@')) {
-      try {
-        if (typeof createBlindIndex === 'function') {
-          usuario = await collection.findOne({ mail_index: createBlindIndex(userId.toLowerCase().trim()) });
-        } else {
-          usuario = null;
-        }
-      } catch (e) {
-        console.error('notificaciones.unread-count: mail_index lookup failed:', e && e.message);
-        usuario = null;
-      }
-    } else {
-      usuario = await collection.findOne({ id: userId });
-    }
-
-    if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
-
-    const unreadCount = (usuario.notificaciones || []).filter(n => !n.leido).length;
-    res.json({ unreadCount });
-  } catch (err) {
-    res.status(500).json({ error: 'Error en el servidor' });
-  }
-});
-
-// Alias compatible hacia atrás: aceptar GET /api/noti/:userId/unread-count
-// Permite pasar un email sin necesidad de que sea ObjectId.
-router.get('/:userId/unread-count', async (req, res) => {
-  try {
-    const { userId } = req.params;
     if (!req.db) return res.status(503).json({ error: 'Servicio no disponible: base de datos no conectada' });
 
     const users = req.db.collection('usuarios');
@@ -542,9 +535,26 @@ router.get('/:userId/unread-count', async (req, res) => {
       }
     }
 
-    // Si no resultó, intentar por mail / id / nombre
+    // Si no resultó, intentar por mail_index (y fallback a texto plano)
     if (!usuario) {
-      usuario = await users.findOne({ $or: [{ mail: userId }, { id: userId }, { nombre: userId }] }, { projection: { notificaciones: 1 } });
+      if (userId.includes('@')) {
+        try {
+          usuario = await users.findOne(
+            { mail_index: createBlindIndex(userId.toLowerCase().trim()) },
+            { projection: { notificaciones: 1 } }
+          );
+        } catch (e) {
+          console.error('notificaciones.unread-count: mail_index lookup failed:', e && e.message);
+        }
+      }
+    }
+
+    // Fallback: mail/id/nombre en texto plano
+    if (!usuario) {
+      usuario = await users.findOne(
+        { $or: [{ mail: userId }, { id: userId }, { nombre: userId }] },
+        { projection: { notificaciones: 1 } }
+      );
     }
 
     if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
