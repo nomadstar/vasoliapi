@@ -721,33 +721,147 @@ async function listFolderChildren(drive, folderId) {
   return res.data.files || [];
 }
 
-// GET /api/drive/browse?folderId=... OR ?path=/A/B&startFromUrl=1
-router.get('/browse', async (req, res) => {
+// Asegura que la ruta relativa exista creando carpetas faltantes y devuelve el folderId final
+async function ensureFolderPath(drive, startFolderId, relPath) {
+  if (!relPath || relPath === '' || relPath === '/') return startFolderId || 'root';
+  const parts = relPath.split('/').filter(Boolean);
+  let parent = startFolderId || 'root';
+  for (const part of parts) {
+    // buscar carpeta existente
+    const q = `'${parent}' in parents and name = '${part.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+    const res = await drive.files.list({ q, fields: 'files(id,name)', pageSize: 5, supportsAllDrives: true, includeItemsFromAllDrives: true });
+    const files = res.data.files || [];
+    if (files.length > 0) {
+      parent = files[0].id;
+      continue;
+    }
+    // crear carpeta si no existe
+    const createRes = await drive.files.create({
+      requestBody: { name: part, mimeType: 'application/vnd.google-apps.folder', parents: parent ? [parent] : undefined },
+      fields: 'id,name',
+      supportsAllDrives: true,
+    });
+    parent = createRes.data.id;
+  }
+  return parent;
+}
+
+// Subir archivo por ruta (crea carpetas intermedias si faltan)
+// POST /api/drive/upload-by-path (form-data): file, path (ej: "Folder/Sub"), startFromUrl or startFromFolderId optional
+router.post('/upload-by-path', upload.single('file'), async (req, res) => {
   try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo (campo file)' });
+
     const auth = await ensureAuthClient();
     const drive = google.drive({ version: 'v3', auth });
 
-    const folderIdParam = req.query.folderId;
-    const folderUrlParam = req.query.folderUrl;
-    const startFromEnv = extractFolderId(folderUrlParam) || extractFolderId(process.env.DRIVE_FOLDER_URL) || 'root';
-    const path = req.query.path; // ruta relativa: "Carpeta/Subcarpeta"
+    const path = req.body.path || req.query.path; // ruta relativa
+    const startFromUrl = req.body.startFromUrl || req.query.startFromUrl;
+    const startFromFolderId = req.body.startFromFolderId || req.query.startFromFolderId;
+    const startFromEnv = extractFolderId(startFromUrl) || extractFolderId(process.env.DRIVE_FOLDER_URL) || 'root';
+    const startFolder = startFromFolderId || startFromEnv;
 
-    let folderId = folderIdParam || startFromEnv;
+    const targetFolderId = path ? await ensureFolderPath(drive, startFolder, path) : startFolder;
 
-    if (path) {
-      const resolved = await resolveFolderByPath(drive, folderId, path);
-      if (!resolved) return res.status(404).json({ ok: false, error: 'Ruta no encontrada' });
-      folderId = resolved;
-    }
+    const fileMetadata = { name: req.file.originalname, parents: targetFolderId ? [targetFolderId] : undefined };
+    const bufferStream = new Stream.PassThrough();
+    bufferStream.end(req.file.buffer);
 
-    const children = await listFolderChildren(drive, folderId);
-    return res.json({ ok: true, folderId, path: path || null, children });
+    const response = await drive.files.create({
+      requestBody: fileMetadata,
+      media: { mimeType: req.file.mimetype || 'application/octet-stream', body: bufferStream },
+      fields: 'id, name, mimeType, size, parents, webViewLink, webContentLink',
+      supportsAllDrives: true,
+    });
+
+    res.json({ ok: true, file: response.data, folderId: targetFolderId });
   } catch (err) {
-    console.error('Drive browse error:', err.message || err);
+    console.error('Drive upload-by-path error:', err.message || err);
     if (isInsufficientPermissionError(err)) {
-      return res.status(403).json({ ok: false, error: 'Permisos insuficientes. Reautoriza en /api/drive/auth', reauth_url: makeReauthUrl() });
+      return res.status(403).json({ ok: false, error: 'Permisos insuficientes. Reautoriza en /api/drive/auth', reauthUrl: makeReauthUrl() });
     }
     res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+// GET /api/drive/browse?folderId=<id>&path=<relPath>&deep=1
+router.get('/browse', async (req, res) => {
+  try {
+    const folderIdParam = req.query.folderId || null;
+    const relPath = req.query.path || null;
+    const deep = parseInt(req.query.deep || '0', 10); // 0 = no deep, 1 = one level, 2 = two levels
+
+    const auth = await ensureAuthClient();
+    const drive = google.drive({ version: 'v3', auth });
+
+    // Si recibimos un path relativo, calcular folderId (path es relativo a folderIdParam o a ENV default)
+    let startFolder = folderIdParam || extractFolderId(process.env.DRIVE_FOLDER_URL) || 'root';
+    if (relPath) {
+      // resolvePathWithoutCreate: intenta resolver la ruta sin crear carpetas
+      async function resolvePathWithoutCreate(driveClient, startFolderId, rel) {
+        if (!rel || rel === '' || rel === '/') return startFolderId || 'root';
+        const parts = rel.split('/').filter(Boolean);
+        let parent = startFolderId || 'root';
+        for (const part of parts) {
+          const q = `'${parent}' in parents and name = '${part.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+          const r = await driveClient.files.list({ q, fields: 'files(id,name)', pageSize: 1, supportsAllDrives: true, includeItemsFromAllDrives: true });
+          const files = r.data.files || [];
+          if (files.length === 0) return null; // no existe la ruta completa
+          parent = files[0].id;
+        }
+        return parent;
+      }
+
+      const resolved = await resolvePathWithoutCreate(drive, startFolder, relPath);
+      if (!resolved) {
+        // si no existe la ruta y no queremos crearla, devolver children vacío
+        return res.json({ ok: true, folderId: null, path: relPath, children: [] });
+      }
+      startFolder = resolved;
+    }
+
+    // Listar hijos de la carpeta resuelta (usa helper global listFolderChildren)
+    const children = await listFolderChildren(drive, startFolder);
+
+    // Si no hay hijos y deep>0, recorrer subcarpetas (1..deep niveles) buscando archivos
+    let combined = Array.isArray(children) ? children.slice() : [];
+    if ((combined.length === 0) && deep > 0) {
+      const childFolders = (await listFolderChildren(drive, startFolder)).filter(f => f.mimeType === 'application/vnd.google-apps.folder');
+      for (const cf of childFolders) {
+        if (combined.length > 0) break;
+        const cfChildren = await listFolderChildren(drive, cf.id);
+        const filesHere = cfChildren.filter(x => x.mimeType !== 'application/vnd.google-apps.folder');
+        if (filesHere.length) {
+          combined = filesHere;
+          break;
+        }
+        if (deep >= 2) {
+          const subfolders = cfChildren.filter(x => x.mimeType === 'application/vnd.google-apps.folder');
+          for (const sf of subfolders) {
+            const sfChildren = await listFolderChildren(drive, sf.id);
+            const sfFiles = sfChildren.filter(x => x.mimeType !== 'application/vnd.google-apps.folder');
+            if (sfFiles.length) {
+              combined = sfFiles;
+              break;
+            }
+          }
+          if (combined.length) break;
+        }
+      }
+    }
+
+    return res.json({
+      ok: true,
+      folderId: startFolder,
+      path: relPath || null,
+      children: combined
+    });
+  } catch (err) {
+    console.error('/api/drive/browse error', err);
+    if (isInsufficientPermissionError(err)) {
+      return res.status(403).json({ ok: false, error: 'Permisos insuficientes. Reautoriza en /api/drive/auth', reauthUrl: makeReauthUrl() });
+    }
+    return res.status(500).json({ ok: false, error: err.message || String(err) });
   }
 });
 
