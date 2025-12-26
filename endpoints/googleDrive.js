@@ -167,9 +167,14 @@ router.get('/auth', (req, res) => {
 // Step 2: callback donde Google redirige con el código
 router.get('/oauth2callback', async (req, res) => {
   try {
-    debugLog('Incoming /oauth2callback', { query: req.query });
+    debugLog('Incoming /oauth2callback', { query: req.query, originalUrl: req.originalUrl });
+    const oauthError = req.query?.error;
+    if (oauthError) return res.status(400).send(`OAuth error: ${oauthError}`);
+
+    const code = req.query?.code;
+    if (!code) return res.status(400).send('Missing OAuth code in callback');
+
     const oauth2Client = getOAuth2Client(resolveRedirectUri(req));
-    const { code } = req.query;
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
     saveTokens(tokens);
